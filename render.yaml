@@ -17,7 +17,7 @@ services:
       - key: FORCE_HTTPS
         value: "true"
       - key: DATABASE_SSL
-        value: "true"
+        value: "false"
       - key: JWT_EXPIRY
         value: 15m
       - key: JWT_REFRESH_EXPIRY

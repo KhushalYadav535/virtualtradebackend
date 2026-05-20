@@ -7,8 +7,8 @@ const createPool = () => {
     console.log('⚠ DATABASE_URL not set, using in-memory fallback');
     return null;
   }
-  const useSsl =
-    process.env.DATABASE_SSL === 'true' || process.env.NODE_ENV === 'production';
+  // Only enable SSL when explicitly set — many self-hosted DBs (e.g. Docker) do not support it.
+  const useSsl = process.env.DATABASE_SSL === 'true';
 
   return new Pool({
     connectionString: process.env.DATABASE_URL,
