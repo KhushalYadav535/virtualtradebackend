@@ -70,7 +70,11 @@ app.use('/api', routes);
 app.use(errorHandler);
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    db: isDbReady,
+    timestamp: new Date().toISOString()
+  });
 });
 
 let isDbReady = false;

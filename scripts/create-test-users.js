@@ -12,10 +12,13 @@ const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
 const { initDatabase } = require('../src/config/database');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false
-});
+const { buildDatabasePoolConfig } = require('../src/config/dbPool');
+const built = buildDatabasePoolConfig();
+if (!built) {
+  console.error('DATABASE_URL is not set');
+  process.exit(1);
+}
+const pool = new Pool(built.config);
 
 const DEFAULT_PASSWORD = process.env.STUDENT_PASSWORD || 'Student123!';
 

@@ -7,10 +7,13 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const bcrypt = require('bcrypt');
 const { Pool } = require('pg');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false
-});
+const { buildDatabasePoolConfig } = require('../src/config/dbPool');
+const built = buildDatabasePoolConfig();
+if (!built) {
+  console.error('DATABASE_URL is not set');
+  process.exit(1);
+}
+const pool = new Pool(built.config);
 
 async function seedAdmin() {
   const email = process.env.ADMIN_EMAIL || 'admin@virtualtrade.com';

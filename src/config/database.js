@@ -1,22 +1,22 @@
 const { Pool } = require('pg');
+const { buildDatabasePoolConfig } = require('./dbPool');
 
 let pool = null;
+let poolMeta = null;
 
 const createPool = () => {
-  if (!process.env.DATABASE_URL) {
+  const built = buildDatabasePoolConfig();
+  if (!built) {
     console.log('⚠ DATABASE_URL not set, using in-memory fallback');
     return null;
   }
-  // Only enable SSL when explicitly set — many self-hosted DBs (e.g. Docker) do not support it.
-  const useSsl = process.env.DATABASE_SSL === 'true';
 
-  return new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: useSsl ? { rejectUnauthorized: false } : false,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000
-  });
+  poolMeta = built;
+  console.log(
+    `✓ Database pool: ssl=${built.useSsl ? 'on' : 'off'}, host=${built.host}, DATABASE_SSL=${process.env.DATABASE_SSL || '(unset)'}`
+  );
+
+  return new Pool(built.config);
 };
 
 pool = createPool();
