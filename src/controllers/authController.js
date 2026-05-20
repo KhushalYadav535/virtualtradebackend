@@ -26,6 +26,27 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8).max(100)
 });
 
+const deleteAccountSchema = z.object({
+  password: z.string().min(1)
+});
+
+const mobileOtpSchema = z.object({
+  phone: z.string().min(10).max(15),
+  purpose: z.enum(['mobile_register', 'mobile_login']).optional()
+});
+
+const mobileRegisterSchema = z.object({
+  name: z.string().min(2).max(100),
+  phone: z.string().min(10).max(15),
+  password: z.string().min(8).max(100),
+  otp: z.string().length(6)
+});
+
+const mobileLoginSchema = z.object({
+  phone: z.string().min(10).max(15),
+  otp: z.string().length(6)
+});
+
 const register = async (req, res, next) => {
   try {
     const { name, email, password, role, batchId } = registerSchema.parse(req.body);
@@ -147,8 +168,22 @@ const changePassword = async (req, res, next) => {
   }
 };
 
-const getProfile = async (req, res) => {
-  res.json({ user: req.user });
+const getProfile = async (req, res, next) => {
+  try {
+    const user = await authService.getUserProfile(req.user.id);
+    res.json({ user });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateProfile = async (req, res, next) => {
+  try {
+    const user = await authService.updateProfile(req.user.id, req.body);
+    res.json({ user, message: 'Profile updated' });
+  } catch (err) {
+    next(err);
+  }
 };
 
 const getSessions = async (req, res, next) => {
@@ -188,6 +223,16 @@ const updateActivity = async (req, res, next) => {
   }
 };
 
+const deleteAccount = async (req, res, next) => {
+  try {
+    const { password } = deleteAccountSchema.parse(req.body);
+    const result = await authService.deleteAccount(req.user.id, password);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const verifyEmail = async (req, res, next) => {
   try {
     const { email, otp } = req.body;
@@ -199,9 +244,46 @@ const verifyEmail = async (req, res, next) => {
   }
 };
 
+const sendMobileOTP = async (req, res, next) => {
+  try {
+    const { phone, purpose } = mobileOtpSchema.parse(req.body);
+    const result = await authService.generatePhoneOTP(phone, purpose || 'mobile_login');
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const registerWithPhone = async (req, res, next) => {
+  try {
+    const { name, phone, password, otp } = mobileRegisterSchema.parse(req.body);
+    const result = await authService.registerWithPhone(name, phone, password, otp);
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const loginWithPhone = async (req, res, next) => {
+  try {
+    const { phone, otp } = mobileLoginSchema.parse(req.body);
+    const result = await authService.loginWithPhone(
+      phone,
+      otp,
+      req.headers['user-agent'],
+      req.headers['user-agent'],
+      req.ip
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   register, login, verify2FA, setup2FA, disable2FA,
   refreshToken, requestPasswordReset, verifyPasswordResetOTP, resetPassword, resendOTP,
-  changePassword, getProfile, getSessions, revokeSession,
-  revokeAllSessions, updateActivity, verifyEmail
+  changePassword, getProfile, updateProfile, getSessions, revokeSession,
+  revokeAllSessions, updateActivity, deleteAccount, verifyEmail,
+  sendMobileOTP, registerWithPhone, loginWithPhone
 };

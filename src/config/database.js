@@ -87,12 +87,32 @@ const initDatabase = async () => {
         executed_at TIMESTAMP
       );
 
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS product_type VARCHAR(10) DEFAULT 'CNC';
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS trigger_price DECIMAL(10,2);
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS target_price DECIMAL(10,2);
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS stoploss_price DECIMAL(10,2);
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS validity VARCHAR(10) DEFAULT 'DAY';
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS parent_order_id UUID REFERENCES orders(id);
+
       CREATE TABLE IF NOT EXISTS holdings (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
         symbol VARCHAR(20) NOT NULL,
         qty INTEGER NOT NULL,
         avg_buy_price DECIMAL(10,2) NOT NULL,
+        last_updated TIMESTAMP DEFAULT NOW(),
+        UNIQUE(user_id, symbol)
+      );
+
+      CREATE TABLE IF NOT EXISTS intraday_positions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        symbol VARCHAR(20) NOT NULL,
+        exchange VARCHAR(10) DEFAULT 'NSE',
+        qty INTEGER NOT NULL,
+        avg_buy_price DECIMAL(10,2) NOT NULL,
+        margin_blocked DECIMAL(15,2) NOT NULL DEFAULT 0,
+        opened_at TIMESTAMP DEFAULT NOW(),
         last_updated TIMESTAMP DEFAULT NOW(),
         UNIQUE(user_id, symbol)
       );
@@ -136,6 +156,7 @@ const initDatabase = async () => {
 
       ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS family_id UUID;
       ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS is_revoked BOOLEAN DEFAULT false;
+      ALTER TABLE refresh_tokens ALTER COLUMN token TYPE TEXT;
 
       CREATE TABLE IF NOT EXISTS user_sessions (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -166,6 +187,87 @@ const initDatabase = async () => {
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS achievements (
+        id VARCHAR(50) PRIMARY KEY,
+        title VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL,
+        icon VARCHAR(50) NOT NULL,
+        points INTEGER DEFAULT 10
+      );
+
+      CREATE TABLE IF NOT EXISTS user_achievements (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        achievement_id VARCHAR(50) REFERENCES achievements(id) ON DELETE CASCADE,
+        unlocked_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(user_id, achievement_id)
+      );
+
+      INSERT INTO achievements (id, title, description, icon, points) VALUES
+        ('first_trade', 'First Trade', 'Placed your very first order', 'rocket', 50),
+        ('first_profit', 'First Profit', 'Closed a trade with positive P&L', 'trending-up', 100),
+        ('lot_master', 'Lot Master', 'Traded a total of 100 lots', 'layers', 150),
+        ('diversity', 'Diverse Portfolio', 'Held 5 different stocks at once', 'pie-chart', 75),
+        ('diamond_hands', 'Diamond Hands', 'Held a position for more than 7 days', 'diamond', 200)
+      ON CONFLICT (id) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS price_alerts (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        symbol VARCHAR(20) NOT NULL,
+        exchange VARCHAR(10) DEFAULT 'NSE',
+        condition_type VARCHAR(20) NOT NULL,
+        target_price DECIMAL(12,2),
+        target_pct DECIMAL(8,2),
+        baseline_price DECIMAL(12,2),
+        status VARCHAR(20) DEFAULT 'active',
+        triggered_at TIMESTAMP,
+        triggered_price DECIMAL(12,2),
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS in_app_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        type VARCHAR(50) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        body TEXT,
+        metadata JSONB DEFAULT '{}',
+        is_read BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_price_alerts_user ON price_alerts(user_id);
+      CREATE INDEX IF NOT EXISTS idx_price_alerts_status ON price_alerts(status);
+      CREATE INDEX IF NOT EXISTS idx_notifications_user ON in_app_notifications(user_id);
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(15) UNIQUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB DEFAULT '{"orders":true,"alerts":true,"achievements":true,"marketing":false}'::jsonb;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS locale VARCHAR(10) DEFAULT 'en';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS trading_prefs JSONB DEFAULT '{}'::jsonb;
+
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_amo BOOLEAN DEFAULT false;
+
+      ALTER TABLE price_alerts ADD COLUMN IF NOT EXISTS alert_kind VARCHAR(20) DEFAULT 'price';
+      ALTER TABLE price_alerts ADD COLUMN IF NOT EXISTS min_volume BIGINT;
+
+      ALTER TABLE watchlist_items ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0;
+      ALTER TABLE watchlists ADD COLUMN IF NOT EXISTS share_token VARCHAR(36) UNIQUE;
+
+      ALTER TABLE otp_verification ADD COLUMN IF NOT EXISTS phone VARCHAR(15);
+
+      CREATE TABLE IF NOT EXISTS user_recent_searches (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+        query VARCHAR(100) NOT NULL,
+        symbol VARCHAR(20),
+        exchange VARCHAR(10) DEFAULT 'NSE',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_recent_search_user ON user_recent_searches(user_id);
 
       CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
       CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);

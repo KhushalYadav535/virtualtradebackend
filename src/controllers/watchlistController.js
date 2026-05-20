@@ -19,6 +19,17 @@ const createWatchlist = async (req, res, next) => {
   }
 };
 
+const renameWatchlist = async (req, res, next) => {
+  try {
+    const { watchlistId } = req.params;
+    const { name } = req.body;
+    const watchlist = await watchlistService.renameWatchlist(req.user.id, watchlistId, name);
+    res.json(watchlist);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const deleteWatchlist = async (req, res, next) => {
   try {
     const { watchlistId } = req.params;
@@ -50,4 +61,79 @@ const removeFromWatchlist = async (req, res, next) => {
   }
 };
 
-module.exports = { getWatchlists, createWatchlist, deleteWatchlist, addToWatchlist, removeFromWatchlist };
+const reorderWatchlist = async (req, res, next) => {
+  try {
+    const { watchlistId } = req.params;
+    const { symbols } = req.body;
+    const result = await watchlistService.reorderWatchlist(req.user.id, watchlistId, symbols);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const importTemplate = async (req, res, next) => {
+  try {
+    const { watchlistId } = req.params;
+    const { templateKey } = req.body;
+    const result = await watchlistService.importTemplate(req.user.id, watchlistId, templateKey);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const shareWatchlist = async (req, res, next) => {
+  try {
+    const { watchlistId } = req.params;
+    const result = await watchlistService.shareWatchlist(req.user.id, watchlistId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getSharedWatchlist = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const result = await watchlistService.getSharedWatchlist(token);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const cloneSharedWatchlist = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const { name } = req.body;
+    const wl = await watchlistService.cloneSharedWatchlist(req.user.id, token, name);
+    res.status(201).json(wl);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getTemplates = async (req, res, next) => {
+  try {
+    const { getWatchlistTemplates } = require('../services/marketData');
+    res.json(getWatchlistTemplates());
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = {
+  getWatchlists,
+  createWatchlist,
+  renameWatchlist,
+  deleteWatchlist,
+  addToWatchlist,
+  removeFromWatchlist,
+  reorderWatchlist,
+  importTemplate,
+  shareWatchlist,
+  getSharedWatchlist,
+  cloneSharedWatchlist,
+  getTemplates
+};

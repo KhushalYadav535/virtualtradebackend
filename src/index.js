@@ -11,7 +11,10 @@ const { initDatabase } = require('./config/database');
 const { initRedis } = require('./config/redis');
 const { setupSocket } = require('./socket');
 const { startMarketDataCron } = require('./services/marketData');
-const { executePendingLimitOrders } = require('./services/trading');
+const { executePendingLimitOrders, executePendingStopOrders, executeAmoOrders } = require('./services/trading');
+const { autoSquareOffAllUsers } = require('./services/intraday');
+const { checkAllPriceAlerts } = require('./services/priceAlerts');
+const { isMarketOpen } = require('./services/marketData');
 const { getAllowedOrigins, corsOriginDelegate } = require('./config/cors');
 
 const app = express();
@@ -105,7 +108,16 @@ async function startServer() {
 
   setInterval(() => {
     executePendingLimitOrders().catch(err => console.error('Limit order cron error:', err.message));
+    executePendingStopOrders().catch(err => console.error('SL order cron error:', err.message));
+    executeAmoOrders().catch(err => console.error('AMO cron error:', err.message));
+    checkAllPriceAlerts().catch(err => console.error('Price alert cron error:', err.message));
   }, 30000);
+
+  setInterval(() => {
+    if (!isMarketOpen()) {
+      autoSquareOffAllUsers().catch(err => console.error('MIS square-off error:', err.message));
+    }
+  }, 5 * 60 * 1000);
 
   const PORT = process.env.PORT || 5000;
   httpServer.listen(PORT, () => {

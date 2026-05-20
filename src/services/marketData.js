@@ -110,7 +110,19 @@ const BASE_PRICES = {
   SUNPHARMA: 1400, TATASTEEL: 150, HDFC: 2800, ADANIPORTS: 1200, NTPC: 350,
   POWERGRID: 280, ONGC: 250, COALINDIA: 350, GRASIM: 2800, SBILIFE: 1400,
   BPCL: 400, CIPLA: 1300, EICHERMOT: 3800, DRREDDY: 5500, INDUSINDBK: 1400,
-  ITC: 450
+  ITC: 450, NIFTY: 22000, BANKNIFTY: 48000
+};
+
+const LOT_SIZES = {
+  RELIANCE: 250, TCS: 175, HDFCBANK: 400, INFY: 400, ICICIBANK: 700,
+  SBIN: 1500, BHARTIARTL: 950, KOTAKBANK: 400, LT: 300, NIFTY: 50, BANKNIFTY: 15,
+  MARUTI: 50, BAJFINANCE: 125, ASIANPAINT: 200, TITAN: 175
+};
+
+const getLotSize = (symbol) => {
+  if (symbol.startsWith('NIFTY')) return 50;
+  if (symbol.startsWith('BANKNIFTY')) return 15;
+  return LOT_SIZES[symbol] || 1;
 };
 
 const TIMEFRAME_MAP = {
@@ -134,8 +146,30 @@ const getYahooSymbol = (symbol, exchange = 'NSE') => {
   return exchange === 'BSE' ? `${sym}.BO` : `${sym}.NS`;
 };
 
+const { enrichStock, SECTORS, filterBySector, filterByMarketCap, findByIsin, WATCHLIST_TEMPLATES } = require('../data/stockMetadata');
+
+const enrichQuote = (data) => {
+  if (!data) return data;
+  const meta = enrichStock({ symbol: data.symbol });
+  const prev = data.prevClose || data.ltp || 0;
+  const lotSize = data.lotSize || 1;
+  return {
+    ...data,
+    name: data.name || meta.name || data.symbol,
+    sector: meta.sector,
+    isin: meta.isin,
+    marketCap: meta.marketCap,
+    upperCircuit: data.upperCircuit || parseFloat((prev * 1.2).toFixed(2)),
+    lowerCircuit: data.lowerCircuit || parseFloat((prev * 0.8).toFixed(2)),
+    lotValue: parseFloat(((data.ltp || 0) * lotSize).toFixed(2))
+  };
+};
+
 const getMockQuote = (symbol, exchange = 'NSE') => {
-  const basePrice = BASE_PRICES[symbol] || 1000;
+  let basePrice = BASE_PRICES[symbol] || 1000;
+  if (symbol.includes('CE') || symbol.includes('PE')) {
+     basePrice = 150; // Mock premium for options
+  }
   const variation = (Math.random() - 0.5) * 0.02 * basePrice;
   const ltp = basePrice + variation;
   const change = variation;
@@ -154,6 +188,7 @@ const getMockQuote = (symbol, exchange = 'NSE') => {
     changePercent: parseFloat(changePercent.toFixed(2)),
     week52High: parseFloat((basePrice * 1.2).toFixed(2)),
     week52Low: parseFloat((basePrice * 0.8).toFixed(2)),
+    lotSize: getLotSize(symbol),
     timestamp: new Date().toISOString()
   };
 };
@@ -179,6 +214,7 @@ const fetchNseQuote = async (symbol) => {
       changePercent: parseFloat(priceInfo.pChange || 0),
       week52High: parseFloat(priceInfo.weekHighLow?.max || ltp * 1.2),
       week52Low: parseFloat(priceInfo.weekHighLow?.min || ltp * 0.8),
+      lotSize: getLotSize(symbol),
       timestamp: new Date().toISOString()
     };
   } catch (err) {
@@ -204,6 +240,7 @@ const fetchYahooQuote = async (symbol, exchange = 'NSE') => {
       changePercent: quote.regularMarketChangePercent || 0,
       week52High: quote.fiftyTwoWeekHigh || 0,
       week52Low: quote.fiftyTwoWeekLow || 0,
+      lotSize: getLotSize(symbol),
       timestamp: new Date().toISOString()
     };
   } catch {
@@ -233,6 +270,7 @@ const getStockQuote = async (symbol, exchange = 'NSE') => {
     data = getMockQuote(sym, exchange);
   }
 
+  data = enrichQuote(data);
   await cachePrice(cacheKey, data);
   return data;
 };
@@ -249,7 +287,8 @@ const fetchNseStockList = async () => {
     return NSE_SYMBOLS.map((symbol) => ({
       symbol,
       name: STOCK_NAMES[symbol] || symbol,
-      exchange: 'NSE'
+      exchange: 'NSE',
+      lotSize: getLotSize(symbol)
     }));
   }
 
@@ -263,7 +302,8 @@ const fetchNseStockList = async () => {
       .map((item) => ({
         symbol: item.metadata.symbol.toUpperCase(),
         name: item.metadata.companyName || item.metadata.symbol,
-        exchange: 'NSE'
+        exchange: 'NSE',
+        lotSize: getLotSize(item.metadata.symbol.toUpperCase())
       }));
 
     if (rows.length > 0) return rows;
@@ -276,14 +316,16 @@ const fetchNseStockList = async () => {
     return symbols.map((symbol) => ({
       symbol: symbol.toUpperCase(),
       name: STOCK_NAMES[symbol] || symbol,
-      exchange: 'NSE'
+      exchange: 'NSE',
+      lotSize: getLotSize(symbol)
     }));
   } catch (err) {
     console.error('NSE symbols fallback failed:', err.message);
     return NSE_SYMBOLS.map((symbol) => ({
       symbol,
       name: STOCK_NAMES[symbol] || symbol,
-      exchange: 'NSE'
+      exchange: 'NSE',
+      lotSize: getLotSize(symbol)
     }));
   }
 };
@@ -322,7 +364,8 @@ const fetchBseStockList = async () => {
         symbol: rawSymbol,
         name: (item.Scrip_Name || item.Issuer_Name || rawSymbol).trim(),
         exchange: 'BSE',
-        bseCode: item.SCRIP_CD
+        bseCode: item.SCRIP_CD,
+        lotSize: getLotSize(rawSymbol)
       });
     }
 
@@ -332,7 +375,8 @@ const fetchBseStockList = async () => {
     return BSE_SYMBOLS.map((symbol) => ({
       symbol,
       name: STOCK_NAMES[symbol] || symbol,
-      exchange: 'BSE'
+      exchange: 'BSE',
+      lotSize: getLotSize(symbol)
     }));
   }
 };
@@ -346,22 +390,34 @@ const buildFullStockList = async () => {
 };
 
 const searchStocks = async (query, options = {}) => {
-  const { exchange, limit = 50, offset = 0 } = options;
+  const { exchange, limit = 50, offset = 0, sector, marketCap, isin, lotFilter } = options;
   const queryLower = (query || '').toLowerCase().trim();
-  let symbols = await getStockList();
+  let symbols = (await getStockList()).map(enrichStock);
 
   if (exchange && exchange !== 'ALL') {
     const ex = exchange.toUpperCase();
     symbols = symbols.filter((s) => s.exchange === ex);
   }
+  if (sector) symbols = filterBySector(symbols, sector);
+  if (marketCap) symbols = filterByMarketCap(symbols, marketCap);
 
-  const filtered = queryLower
-    ? symbols.filter(
-        (s) =>
-          s.symbol.toLowerCase().includes(queryLower) ||
-          (s.name && s.name.toLowerCase().includes(queryLower))
-      )
-    : symbols;
+  let filtered = symbols;
+  if (isin) {
+    filtered = findByIsin(symbols, isin);
+  } else if (queryLower) {
+    filtered = symbols.filter(
+      (s) =>
+        s.symbol.toLowerCase().includes(queryLower) ||
+        (s.name && s.name.toLowerCase().includes(queryLower)) ||
+        (s.isin && s.isin.toLowerCase().includes(queryLower))
+    );
+  }
+
+  if (lotFilter === 'eq1') {
+    filtered = filtered.filter((s) => (s.lotSize || 1) === 1);
+  } else if (lotFilter === 'gt1') {
+    filtered = filtered.filter((s) => (s.lotSize || 1) > 1);
+  }
 
   const start = Math.max(0, offset);
   const end = start + limit;
@@ -375,6 +431,15 @@ const searchStocks = async (query, options = {}) => {
     hasMore: end < filtered.length
   };
 };
+
+const getSectorList = () => SECTORS;
+
+const getWatchlistTemplates = () =>
+  Object.entries(WATCHLIST_TEMPLATES).map(([key, t]) => ({ key, name: t.name, count: t.symbols.length }));
+
+const POPULAR_SEARCHES = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'NIFTY', 'SBIN', 'ITC', 'ICICIBANK'];
+
+const getPopularSearches = () => POPULAR_SEARCHES;
 
 const getStockList = async () => {
   const cached = await getCachedStockList();
@@ -486,17 +551,22 @@ const getIndices = async () => {
   if (!yf?.quote) {
     return [
       { symbol: 'NIFTY 50', ltp: 22500 + Math.random() * 500, change: Math.random() * 100 - 50, changePercent: Math.random() * 2 - 1 },
-      { symbol: 'NIFTY BANK', ltp: 48000 + Math.random() * 1000, change: Math.random() * 200 - 100, changePercent: Math.random() * 2 - 1 }
+      { symbol: 'NIFTY BANK', ltp: 48000 + Math.random() * 1000, change: Math.random() * 200 - 100, changePercent: Math.random() * 2 - 1 },
+      { symbol: 'SENSEX', ltp: 74000 + Math.random() * 800, change: Math.random() * 150 - 75, changePercent: Math.random() * 2 - 1 }
     ];
   }
 
-  const indices = ['^NSEI', '^NSEBANK'];
+  const indexMap = [
+    { yahoo: '^NSEI', label: 'NIFTY 50' },
+    { yahoo: '^NSEBANK', label: 'NIFTY BANK' },
+    { yahoo: '^BSESN', label: 'SENSEX' }
+  ];
   const results = await Promise.all(
-    indices.map(async (symbol) => {
+    indexMap.map(async ({ yahoo, label }) => {
       try {
-        const quote = await yf.quote(symbol);
+        const quote = await yf.quote(yahoo);
         return {
-          symbol: symbol === '^NSEI' ? 'NIFTY 50' : 'NIFTY BANK',
+          symbol: label,
           ltp: quote.regularMarketPrice,
           change: quote.regularMarketChange,
           changePercent: quote.regularMarketChangePercent
@@ -583,7 +653,48 @@ const startMarketDataCron = (io) => {
   console.log('✓ Market data cron started (5s interval)');
 };
 
+
+const { getOptionChain, getOptionExpiries } = require('./optionChain');
+
+const getSectorAnalytics = async () => {
+  const { NIFTY_50 } = require('../data/stockMetadata');
+  const quotes = await getMultipleQuotes(NIFTY_50);
+  const grouped = {};
+
+  for (const q of quotes.filter(Boolean)) {
+    const meta = enrichStock({ symbol: q.symbol });
+    const sector = meta.sector || 'Other';
+    if (!grouped[sector]) {
+      grouped[sector] = { sector, stocks: [], totalChange: 0, count: 0 };
+    }
+    grouped[sector].stocks.push({
+      symbol: q.symbol,
+      ltp: q.ltp,
+      changePercent: q.changePercent || 0,
+      volume: q.volume || 0
+    });
+    grouped[sector].totalChange += q.changePercent || 0;
+    grouped[sector].count += 1;
+  }
+
+  return Object.values(grouped)
+    .map((g) => {
+      const sorted = g.stocks.sort((a, b) => (b.changePercent || 0) - (a.changePercent || 0));
+      return {
+        sector: g.sector,
+        count: g.count,
+        avgChangePercent: g.count ? parseFloat((g.totalChange / g.count).toFixed(2)) : 0,
+        topGainer: sorted[0] || null,
+        topLoser: sorted[sorted.length - 1] || null,
+        stocks: sorted
+      };
+    })
+    .sort((a, b) => b.avgChangePercent - a.avgChangePercent);
+};
+
 module.exports = {
+  getOptionChain,
+  getOptionExpiries,
   getStockQuote,
   getMultipleQuotes,
   searchStocks,
@@ -594,5 +705,9 @@ module.exports = {
   getIndices,
   startMarketDataCron,
   isMarketOpen,
-  getMarketStatus
+  getMarketStatus,
+  getSectorList,
+  getWatchlistTemplates,
+  getPopularSearches,
+  getSectorAnalytics
 };

@@ -22,19 +22,13 @@ const authenticate = async (req, res, next) => {
       return res.status(403).json({ error: 'Account has been deactivated' });
     }
 
-    const inactivityLimit = 30 * 60 * 1000;
-    if (user.last_activity && (Date.now() - new Date(user.last_activity).getTime()) > inactivityLimit) {
-      await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [user.id]);
-      return res.status(401).json({ error: 'Session expired due to inactivity. Please login again.' });
-    }
-
     req.user = user;
     const { updateActivity } = require('../services/auth');
-    updateActivity(user.id).catch(() => {});
+    await updateActivity(user.id);
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Token expired' });
+      return res.status(401).json({ error: 'Token expired', code: 'TOKEN_EXPIRED' });
     }
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -52,4 +46,21 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { authenticate, authorize };
+const optionalAuth = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return next();
+  try {
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const result = await pool.query(
+      'SELECT id, name, email, role FROM users WHERE id = $1 AND is_active = true',
+      [decoded.userId]
+    );
+    if (result.rows.length) req.user = result.rows[0];
+  } catch (_) {
+    /* ignore invalid optional token */
+  }
+  next();
+};
+
+module.exports = { authenticate, authorize, optionalAuth };

@@ -1,5 +1,6 @@
 const { pool } = require('../config/database');
 const { getStockQuote } = require('./marketData');
+const intraday = require('./intraday');
 
 const getHoldings = async (userId) => {
   const result = await pool.query(
@@ -75,6 +76,14 @@ const dayPnLResult = await pool.query(
   const realizedPnL = parseFloat(wallet.total_profit || 0);
   const unrealizedPnL = holdings.reduce((sum, h) => sum + h.pnl, 0);
 
+  let intradayPositions = [];
+  try {
+    intradayPositions = await intraday.getPositionsForUser(userId);
+  } catch {
+    intradayPositions = [];
+  }
+  const positionsPnl = intradayPositions.reduce((sum, p) => sum + (p.pnl || 0), 0);
+
   return {
     cashBalance: parseFloat(wallet.balance),
     holdingsValue: parseFloat(holdingsValue.toFixed(2)),
@@ -85,7 +94,14 @@ const dayPnLResult = await pool.query(
     realizedPnL: realizedPnL,
     unrealizedPnL: parseFloat(unrealizedPnL.toFixed(2)),
     dayPnL: parseFloat((dayPnL + dayUnrealizedPnL).toFixed(2)),
-    holdings: holdings
+    dayReturns: parseFloat((dayPnL + dayUnrealizedPnL).toFixed(2)),
+    dayReturnsPercent: startBalance > 0
+      ? parseFloat((((dayPnL + dayUnrealizedPnL) / startBalance) * 100).toFixed(2))
+      : 0,
+    holdings: holdings,
+    intradayPositions,
+    positionsCount: intradayPositions.length,
+    positionsPnl: parseFloat(positionsPnl.toFixed(2))
   };
 };
 
@@ -289,10 +305,53 @@ const getTimeLossAnalytics = async (userId, period = 'month') => {
   };
 };
 
+const exportHoldingsCsv = async (userId) => {
+  const holdings = await getHoldings(userId);
+  const header = 'Symbol,Qty,Avg Buy,Current Price,Invested,Current Value,P&L,P&L %';
+  const rows = holdings.map((h) =>
+    [
+      h.symbol,
+      h.qty,
+      h.avg_buy_price,
+      h.currentPrice,
+      h.investedValue,
+      h.currentValue,
+      h.pnl,
+      h.pnlPercent
+    ].join(',')
+  );
+  return [header, ...rows].join('\n');
+};
+
+const exportTradesCsv = async (userId) => {
+  const result = await pool.query(
+    `SELECT id, order_id, symbol, qty, trade_price, trade_type, pnl, timestamp
+     FROM trade_history WHERE user_id = $1 ORDER BY timestamp DESC`,
+    [userId]
+  );
+  const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const header = 'Trade ID,Order ID,Symbol,Quantity,Price,Side,P&L,Date/Time';
+  const rows = result.rows.map((r) =>
+    [
+      r.id,
+      r.order_id || '',
+      esc(r.symbol),
+      r.qty,
+      r.trade_price,
+      esc(r.trade_type),
+      r.pnl ?? 0,
+      esc(r.timestamp)
+    ].join(',')
+  );
+  return [header, ...rows].join('\n');
+};
+
 module.exports = {
   getHoldings,
   getPortfolioSummary,
   getTradeHistory,
   getPortfolioPerformance,
-  getTimeLossAnalytics
+  getTimeLossAnalytics,
+  exportHoldingsCsv,
+  exportTradesCsv
 };

@@ -30,7 +30,20 @@ const deleteSubscription = async (userId) => {
   await pool.query('DELETE FROM push_subscriptions WHERE user_id = $1', [userId]);
 };
 
-const sendNotification = async (userId, payload) => {
+const defaultPrefs = { orders: true, alerts: true, achievements: true, marketing: false };
+
+const getUserNotificationPrefs = async (userId) => {
+  const result = await pool.query('SELECT notification_prefs FROM users WHERE id = $1', [userId]);
+  return { ...defaultPrefs, ...(result.rows[0]?.notification_prefs || {}) };
+};
+
+const sendNotification = async (userId, payload, category = 'alerts') => {
+  const prefs = await getUserNotificationPrefs(userId);
+  if (category === 'orders' && prefs.orders === false) return false;
+  if (category === 'alerts' && prefs.alerts === false) return false;
+  if (category === 'achievements' && prefs.achievements === false) return false;
+  if (category === 'marketing' && prefs.marketing === false) return false;
+
   const subscription = await getSubscription(userId);
   if (!subscription) {
     console.log(`No push subscription for user ${userId}`);
@@ -76,7 +89,7 @@ const sendOrderNotification = async (userId, order) => {
     }
   };
 
-  return sendNotification(userId, payload);
+  return sendNotification(userId, payload, 'orders');
 };
 
 module.exports = {

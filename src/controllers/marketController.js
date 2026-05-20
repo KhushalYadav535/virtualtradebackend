@@ -27,13 +27,56 @@ const getMultipleQuotes = async (req, res, next) => {
 
 const searchStocks = async (req, res, next) => {
   try {
-    const { q = '', exchange, limit, offset } = req.query;
+    const { q = '', exchange, limit, offset, sector, marketCap, isin, lotFilter } = req.query;
     const results = await marketService.searchStocks(q, {
       exchange: exchange || 'ALL',
       limit: Math.min(parseInt(limit, 10) || 50, 100),
-      offset: Math.max(0, parseInt(offset, 10) || 0)
+      offset: Math.max(0, parseInt(offset, 10) || 0),
+      sector: sector || undefined,
+      marketCap: marketCap || undefined,
+      isin: isin || undefined,
+      lotFilter: lotFilter || undefined
     });
+    if (req.user?.id && q?.trim()) {
+      const recentSearch = require('../services/recentSearch');
+      recentSearch.recordSearch(req.user.id, { query: q.trim() }).catch(() => {});
+    }
     res.json(results);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getSectors = async (req, res, next) => {
+  try {
+    res.json(marketService.getSectorList());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getPopularSearches = async (req, res, next) => {
+  try {
+    res.json(marketService.getPopularSearches());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getRecentSearches = async (req, res, next) => {
+  try {
+    const recentSearch = require('../services/recentSearch');
+    const rows = await recentSearch.getRecentSearches(req.user.id);
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getSectorAnalytics = async (req, res, next) => {
+  try {
+    const data = await marketService.getSectorAnalytics();
+    res.json(data);
   } catch (err) {
     next(err);
   }
@@ -95,7 +138,30 @@ const getMarketStatus = async (req, res, next) => {
   }
 };
 
+const getOptionChain = async (req, res, next) => {
+  try {
+    const { symbol } = req.params;
+    const { expiry } = req.query;
+    const chain = await marketService.getOptionChain(symbol.toUpperCase(), expiry || null);
+    res.json(chain);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getOptionExpiries = async (req, res, next) => {
+  try {
+    const { symbol } = req.params;
+    const info = await marketService.getOptionExpiries(symbol.toUpperCase());
+    res.json(info);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getQuote, getMultipleQuotes, searchStocks, getStockList,
-  getHistorical, getTopGainers, getTopLosers, getIndices, getMarketStatus
+  getHistorical, getTopGainers, getTopLosers, getIndices, getMarketStatus,
+  getOptionChain, getOptionExpiries, getSectors, getPopularSearches, getRecentSearches,
+  getSectorAnalytics
 };
