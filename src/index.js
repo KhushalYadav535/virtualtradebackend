@@ -12,8 +12,10 @@ const { initRedis } = require('./config/redis');
 const { setupSocket } = require('./socket');
 const { startMarketDataCron } = require('./services/marketData');
 const { executePendingLimitOrders } = require('./services/trading');
+const { getAllowedOrigins, corsOriginDelegate } = require('./config/cors');
 
 const app = express();
+const allowedOrigins = getAllowedOrigins();
 const httpServer = createServer(app);
 
 if (process.env.NODE_ENV === 'production' || process.env.FORCE_HTTPS === 'true') {
@@ -27,7 +29,7 @@ if (process.env.NODE_ENV === 'production' || process.env.FORCE_HTTPS === 'true')
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
   }
 });
@@ -39,8 +41,8 @@ app.use(helmet({
 const isProduction = process.env.NODE_ENV === 'production';
 
 app.use(cors({
-  origin: '*',
-  credentials: false
+  origin: corsOriginDelegate,
+  credentials: true
 }));
 
 app.use(express.json());
@@ -104,6 +106,7 @@ async function startServer() {
   const PORT = process.env.PORT || 5000;
   httpServer.listen(PORT, () => {
     console.log(`✓ Server running on port ${PORT}`);
+    console.log(`✓ CORS allowed origins: ${allowedOrigins.join(', ')}`);
   });
 }
 

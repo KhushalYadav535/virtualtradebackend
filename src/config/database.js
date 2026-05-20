@@ -7,9 +7,12 @@ const createPool = () => {
     console.log('⚠ DATABASE_URL not set, using in-memory fallback');
     return null;
   }
+  const useSsl =
+    process.env.DATABASE_SSL === 'true' || process.env.NODE_ENV === 'production';
+
   return new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    ssl: useSsl ? { rejectUnauthorized: false } : false,
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000
