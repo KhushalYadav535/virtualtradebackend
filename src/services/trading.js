@@ -1,6 +1,9 @@
 const { pool } = require('../config/database');
 const intraday = require('./intraday');
+const { getMarketPhase } = require('./marketData');
 const { calculateOrderCharges } = require('../utils/orderCharges');
+const { validateOrderQuantity } = require('../utils/lotUtils');
+const { resolvePlacement } = require('../utils/orderExecution');
 
 const PLACE_MARKET = 'market';
 const PLACE_LIMIT = 'limit';
@@ -42,7 +45,7 @@ const getPendingSellQty = async (client, userId, symbol, excludeOrderId = null) 
 const placeOrder = async ({
   userId, symbol, qty, orderType, price = null, triggerPrice = null, targetPrice = null, stoplossPrice = null,
   orderMode = PLACE_MARKET, productType = 'CNC', validity = 'DAY', exchange = 'NSE', parentOrderId = null,
-  isAmo = false
+  isAmo = false, disclosedQty = null
 }) => {
   const client = await pool.connect();
   try {
@@ -54,15 +57,6 @@ const placeOrder = async ({
       throw { status: 400, message: 'Invalid symbol or unable to fetch details' };
     }
     
-    const lotSize = quote.lotSize || 1;
-    if (qty % lotSize !== 0) {
-      throw { status: 400, message: `Quantity must be multiple of ${lotSize} shares (1 lot)` };
-    }
-    const freezeQtyLots = 100;
-    if ((qty / lotSize) > freezeQtyLots) {
-      throw { status: 400, message: `Order exceeds freeze quantity (${freezeQtyLots} lots maximum)` };
-    }
-
     let currentPrice;
     if (orderMode === PLACE_MARKET) {
       if (!quote.ltp) throw { status: 400, message: 'Unable to fetch current price' };
@@ -92,9 +86,33 @@ const placeOrder = async ({
       };
     }
 
-    const isAmoOrder = Boolean(isAmo) && !isMarketOpen();
+    const placement = resolvePlacement({
+      validity,
+      orderMode,
+      isAmo,
+      isMarketOpen: isMarketOpen()
+    });
+    if (!placement.ok) {
+      throw { status: placement.status, message: placement.message };
+    }
+
+    const isAmoOrder = placement.isAmoOrder;
+    const orderValidity = placement.validity;
     const isBracketOrCover = ['bo', 'co'].includes(orderMode);
     const effectiveProduct = productType === 'NRML' ? 'CNC' : productType;
+
+    const disclosed =
+      disclosedQty != null && disclosedQty !== ''
+        ? parseInt(disclosedQty, 10)
+        : null;
+    if (disclosed != null && (disclosed <= 0 || disclosed > qty)) {
+      throw { status: 400, message: 'Disclosed quantity must be between 1 and order quantity' };
+    }
+
+    const lotCheck = validateOrderQuantity(qty, quote, productType, orderType);
+    if (!lotCheck.valid) {
+      throw { status: 400, message: lotCheck.message };
+    }
 
     const totalCost = currentPrice * qty;
     const walletResult = await client.query(
@@ -142,7 +160,7 @@ const placeOrder = async ({
     let executedPrice = null;
     let executedAt = null;
 
-    const executeNow = !isAmoOrder && (orderMode === PLACE_MARKET || isBracketOrCover);
+    const executeNow = placement.executeNow;
 
     if (executeNow) {
       status = 'executed';
@@ -151,13 +169,13 @@ const placeOrder = async ({
     }
 
     const orderResult = await client.query(
-      `INSERT INTO orders (user_id, symbol, exchange, qty, order_type, order_mode, price, trigger_price, target_price, stoploss_price, product_type, validity, parent_order_id, status, executed_price, executed_at, is_amo, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+      `INSERT INTO orders (user_id, symbol, exchange, qty, order_type, order_mode, price, trigger_price, target_price, stoploss_price, product_type, validity, parent_order_id, status, executed_price, executed_at, is_amo, disclosed_qty, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
        RETURNING *`,
       [
         userId, symbol, exchange, qty, orderType, orderMode, price, triggerPrice, targetPrice, stoplossPrice,
         effectiveProduct === 'BO' || effectiveProduct === 'CO' ? 'MIS' : effectiveProduct,
-        validity, parentOrderId, status, executedPrice, executedAt, isAmoOrder
+        orderValidity, parentOrderId, status, executedPrice, executedAt, isAmoOrder, disclosed
       ]
     );
     const order = orderResult.rows[0];
@@ -480,11 +498,32 @@ const executeAmoOrders = async () => {
   }
 };
 
+const cancelExpiredIocOrders = async () => {
+  await pool.query(
+    `UPDATE orders SET status = 'cancelled', reject_reason = 'IOC expired — unfilled quantity cancelled'
+     WHERE validity = 'IOC' AND status = 'pending'
+     AND created_at < NOW() - INTERVAL '90 seconds'`
+  );
+};
+
+const expireDayPendingAtClose = async () => {
+  if (getMarketPhase() !== 'closed') return;
+  await pool.query(
+    `UPDATE orders SET status = 'cancelled', reject_reason = 'DAY order expired at market close'
+     WHERE validity = 'DAY' AND status = 'pending' AND (is_amo IS NOT TRUE)
+     AND order_mode IN ('limit', 'sl', 'sl-m')`
+  );
+};
+
 const executePendingLimitOrders = async () => {
   const { getStockQuote } = require('./marketData');
+  await cancelExpiredIocOrders();
+
   const result = await pool.query(
     `SELECT * FROM orders WHERE order_mode = 'limit' AND status = 'pending'
-     AND (is_amo IS NOT TRUE OR is_amo = false) ORDER BY created_at`
+     AND (is_amo IS NOT TRUE OR is_amo = false)
+     AND (validity IS NULL OR validity IN ('DAY', 'IOC'))
+     ORDER BY created_at`
   );
 
   for (const order of result.rows) {
@@ -526,12 +565,47 @@ const executePendingLimitOrders = async () => {
 
 const getOrderCharges = (params) => calculateOrderCharges(params);
 
+const { enrichOrder, buildCounts, filterAndSortOrders } = require('../utils/orderBookUtils');
+
+const enrichOrdersList = async (rows) => {
+  const { getStockQuote } = require('./marketData');
+  return Promise.all(
+    rows.map(async (row) => {
+      const quote = await getStockQuote(row.symbol);
+      return enrichOrder(row, quote);
+    })
+  );
+};
+
 const getOrders = async (userId, limit = 50) => {
   const result = await pool.query(
     `SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
     [userId, limit]
   );
-  return result.rows;
+  return enrichOrdersList(result.rows);
+};
+
+const getOrdersBook = async (userId, options = {}) => {
+  const limit = Math.min(parseInt(options.limit, 10) || 300, 500);
+  const result = await pool.query(
+    `SELECT * FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`,
+    [userId, limit]
+  );
+  const enriched = await enrichOrdersList(result.rows);
+  const counts = buildCounts(enriched);
+  const orders = filterAndSortOrders(enriched, options);
+  return { orders, counts };
+};
+
+const getOrderById = async (userId, orderId) => {
+  const result = await pool.query(
+    `SELECT * FROM orders WHERE id = $1 AND user_id = $2`,
+    [orderId, userId]
+  );
+  if (!result.rows.length) throw { status: 404, message: 'Order not found' };
+  const { getStockQuote } = require('./marketData');
+  const quote = await getStockQuote(result.rows[0].symbol);
+  return enrichOrder(result.rows[0], quote);
 };
 
 const cancelOrder = async (userId, orderId) => {
@@ -670,13 +744,9 @@ const modifyPendingOrder = async (userId, orderId, updates = {}) => {
     const { getStockQuote } = require('./marketData');
     const quote = await getStockQuote(order.symbol);
     if (!quote) throw { status: 400, message: 'Unable to fetch quote' };
-    const lotSize = quote.lotSize || 1;
-    if (nextQty % lotSize !== 0) {
-      throw { status: 400, message: `Quantity must be multiple of ${lotSize} shares (1 lot)` };
-    }
-    const freezeQtyLots = 100;
-    if (nextQty / lotSize > freezeQtyLots) {
-      throw { status: 400, message: `Order exceeds freeze quantity (${freezeQtyLots} lots maximum)` };
+    const lotCheck = validateOrderQuantity(nextQty, quote, order.product_type, order.order_type);
+    if (!lotCheck.valid) {
+      throw { status: 400, message: lotCheck.message };
     }
 
     const prevClose = quote.prevClose || quote.ltp;
@@ -842,13 +912,40 @@ const executePendingStopOrders = async () => {
   }
 };
 
+const getLotPreview = async ({
+  symbol,
+  productType = 'CNC',
+  qty = 0,
+  orderType = 'BUY',
+  price = null,
+  userId = null
+}) => {
+  const { getStockQuote } = require('./marketData');
+  const { buildLotPreview } = require('../utils/lotUtils');
+  const quote = await getStockQuote(symbol.toUpperCase());
+  if (!quote) throw { status: 404, message: 'Symbol not found' };
+
+  let availableBalance = 0;
+  if (userId) {
+    const w = await pool.query('SELECT balance FROM wallets WHERE user_id = $1', [userId]);
+    availableBalance = parseFloat(w.rows[0]?.balance || 0);
+  }
+
+  return buildLotPreview(quote, productType, qty, orderType, price, availableBalance);
+};
+
 module.exports = {
   placeOrder,
   getOrders,
+  getOrdersBook,
+  getOrderById,
   cancelOrder,
   modifyPendingOrder,
   executePendingLimitOrders,
   executePendingStopOrders,
   executeAmoOrders,
-  getOrderCharges
+  expireDayPendingAtClose,
+  cancelExpiredIocOrders,
+  getOrderCharges,
+  getLotPreview
 };

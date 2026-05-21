@@ -159,9 +159,69 @@ const getOptionExpiries = async (req, res, next) => {
   }
 };
 
+const getWatchlistTemplates = async (req, res, next) => {
+  try {
+    res.json(marketService.getWatchlistTemplates());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getMarketOverview = async (req, res, next) => {
+  try {
+    res.json(await marketService.getMarketOverview());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getMarketDataHub = async (req, res, next) => {
+  try {
+    res.json(await marketService.getMarketDataHub());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getCalendars = async (req, res, next) => {
+  try {
+    const calendars = require('../data/marketCalendars').getAllCalendars();
+    res.json(calendars);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getCorporateActions = async (req, res, next) => {
+  try {
+    res.json(marketService.getCorporateActionsCalendar());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getIndexConstituents = async (req, res, next) => {
+  try {
+    const key = (req.params.key || '').toLowerCase();
+    const pack = await marketService.getIndexConstituents(key);
+    if (!pack) {
+      return res.status(404).json({ error: 'Index pack not found' });
+    }
+    res.json(pack);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getQuote, getMultipleQuotes, searchStocks, getStockList,
   getHistorical, getTopGainers, getTopLosers, getIndices, getMarketStatus,
   getOptionChain, getOptionExpiries, getSectors, getPopularSearches, getRecentSearches,
-  getSectorAnalytics
+  getSectorAnalytics,
+  getWatchlistTemplates,
+  getIndexConstituents,
+  getMarketOverview,
+  getMarketDataHub,
+  getCalendars,
+  getCorporateActions
 };

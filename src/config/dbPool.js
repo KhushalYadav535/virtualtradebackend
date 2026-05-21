@@ -9,9 +9,9 @@ function buildDatabasePoolConfig() {
   const useSsl = String(process.env.DATABASE_SSL || '').trim().toLowerCase() === 'true';
 
   const base = {
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 15000,
+    max: 12,
+    idleTimeoutMillis: 20000,
+    connectionTimeoutMillis: 20000,
     ssl: useSsl ? { rejectUnauthorized: false } : false
   };
 

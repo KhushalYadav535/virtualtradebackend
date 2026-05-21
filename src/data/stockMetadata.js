@@ -30,14 +30,35 @@ const ISIN_MAP = {
   RELIANCE: 'INE002A01018', TCS: 'INE467B01029', HDFCBANK: 'INE040A01034', INFY: 'INE009A01021',
   ICICIBANK: 'INE090A01021', ITC: 'INE154A01025', SBIN: 'INE062A01020', BHARTIARTL: 'INE397D01024',
   KOTAKBANK: 'INE237A01028', LT: 'INE018A01030', AXISBANK: 'INE238A01034', WIPRO: 'INE075A01022',
-  HCLTECH: 'INE860A01027', TATAMOTORS: 'INE155A01022', MARUTI: 'INE585B01010', SUNPHARMA: 'INE044A01036'
+  HCLTECH: 'INE860A01027', TATAMOTORS: 'INE155A01022', MARUTI: 'INE585B01010', SUNPHARMA: 'INE044A01036',
+  HINDUNILVR: 'INE030A01027', BAJFINANCE: 'INE296A01024', ASIANPAINT: 'INE021A01026',
+  NTPC: 'INE733E01010', ONGC: 'INE213A01029', TATASTEEL: 'INE081A01020', TECHM: 'INE669C01036',
+  NESTLEIND: 'INE239A01016', ULTRACEMCO: 'INE481G01011', DIVISLAB: 'INE361B01024', CIPLA: 'INE059A01026'
 };
+
+const NIFTY_100_EXTRA = [
+  'LTIM', 'BANDHANBNK', 'FEDERALBNK', 'IDFCFIRSTB', 'PNB', 'BANKBARODA', 'AUBANK',
+  'GODREJCP', 'DABUR', 'HAVELLS', 'PIDILITIND', 'AMBUJACEM', 'ACC', 'DLF', 'VEDL',
+  'IRCTC', 'HAL', 'IOC', 'GAIL', 'TRENT', 'MARICO', 'COLPAL', 'BERGEPAINT', 'INDIGO',
+  'JINDALSTEL', 'SRF', 'LUPIN', 'BIOCON', 'AUROPHARMA', 'TORNTPHARM', 'MUTHOOTFIN',
+  'CHOLAFIN', 'SBICARD', 'SIEMENS', 'ABB', 'BOSCHLTD', 'UNITDSPR', 'SHREECEM'
+];
+const NIFTY_100 = [...new Set([...NIFTY_50, ...NIFTY_100_EXTRA])].slice(0, 100);
 
 const WATCHLIST_TEMPLATES = {
   nifty50: { name: 'Nifty 50', symbols: NIFTY_50 },
+  nifty100: { name: 'Nifty 100', symbols: NIFTY_100 },
   banknifty: { name: 'Bank Nifty', symbols: BANK_NIFTY },
   it: { name: 'IT Pack', symbols: ['TCS', 'INFY', 'WIPRO', 'HCLTECH', 'TECHM', 'LTIM'] },
   pharma: { name: 'Pharma Pack', symbols: ['SUNPHARMA', 'CIPLA', 'DRREDDY', 'DIVISLAB', 'APOLLOHOSP'] }
+};
+
+const INDEX_CONSTITUENTS = {
+  nifty50: { name: 'Nifty 50', symbols: NIFTY_50 },
+  nifty100: { name: 'Nifty 100', symbols: NIFTY_100 },
+  banknifty: { name: 'Nifty Bank', symbols: BANK_NIFTY },
+  it: { name: 'IT Sector Pack', symbols: WATCHLIST_TEMPLATES.it.symbols },
+  pharma: { name: 'Pharma Pack', symbols: WATCHLIST_TEMPLATES.pharma.symbols }
 };
 
 const SECTORS = ['Banking', 'IT', 'Pharma', 'FMCG', 'Auto', 'Energy', 'Metals', 'Consumer', 'Finance'];
@@ -71,10 +92,12 @@ const findByIsin = (stocks, isinQuery) => {
 
 module.exports = {
   NIFTY_50,
+  NIFTY_100,
   BANK_NIFTY,
   SECTOR_MAP,
   ISIN_MAP,
   WATCHLIST_TEMPLATES,
+  INDEX_CONSTITUENTS,
   SECTORS,
   enrichStock,
   filterBySector,

@@ -30,7 +30,7 @@ const deleteSubscription = async (userId) => {
   await pool.query('DELETE FROM push_subscriptions WHERE user_id = $1', [userId]);
 };
 
-const defaultPrefs = { orders: true, alerts: true, achievements: true, marketing: false };
+const defaultPrefs = { orders: true, alerts: true, achievements: true, marketing: false, lotChanges: true };
 
 const getUserNotificationPrefs = async (userId) => {
   const result = await pool.query('SELECT notification_prefs FROM users WHERE id = $1', [userId]);
@@ -43,6 +43,7 @@ const sendNotification = async (userId, payload, category = 'alerts') => {
   if (category === 'alerts' && prefs.alerts === false) return false;
   if (category === 'achievements' && prefs.achievements === false) return false;
   if (category === 'marketing' && prefs.marketing === false) return false;
+  if (category === 'lot_change' && prefs.lotChanges === false) return false;
 
   const subscription = await getSubscription(userId);
   if (!subscription) {
@@ -92,10 +93,22 @@ const sendOrderNotification = async (userId, order) => {
   return sendNotification(userId, payload, 'orders');
 };
 
+const sendLotChangeNotification = async (userId, { symbol, oldLot, newLot }) => {
+  const payload = {
+    title: `Lot size changed: ${symbol}`,
+    body: `Lot size updated from ${oldLot} to ${newLot} shares. Review MIS orders and holdings.`,
+    icon: '/icon-192.png',
+    tag: `lot-${symbol}`,
+    data: { url: '/dashboard/portfolio', symbol, oldLot, newLot }
+  };
+  return sendNotification(userId, payload, 'lot_change');
+};
+
 module.exports = {
   saveSubscription,
   getSubscription,
   deleteSubscription,
   sendNotification,
-  sendOrderNotification
+  sendOrderNotification,
+  sendLotChangeNotification
 };

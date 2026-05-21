@@ -42,6 +42,9 @@ const register = async (name, email, password, role = 'student', batchId = null)
     [user.id, startBalance]
   );
 
+  const { ensureDefaultWatchlist } = require('./watchlist');
+  await ensureDefaultWatchlist(user.id);
+
   const otp = await generateOTP(email, 'verification');
   await sendOTPEmail(email, otp, 'verification');
 
@@ -388,6 +391,8 @@ const registerWithPhone = async (name, phone, password, otp, role = 'student') =
   );
   const user = result.rows[0];
   await pool.query('INSERT INTO wallets (user_id, balance) VALUES ($1, $2)', [user.id, startBalance]);
+  const { ensureDefaultWatchlist } = require('./watchlist');
+  await ensureDefaultWatchlist(user.id);
   const tokens = generateTokens(user.id);
   await saveRefreshToken(user.id, tokens.refreshToken, uuidv4());
   return { ...tokens, user: { ...user, has2FA: false }, startingBalance: startBalance };

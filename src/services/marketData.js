@@ -151,17 +151,29 @@ const { enrichStock, SECTORS, filterBySector, filterByMarketCap, findByIsin, WAT
 const enrichQuote = (data) => {
   if (!data) return data;
   const meta = enrichStock({ symbol: data.symbol });
-  const prev = data.prevClose || data.ltp || 0;
-  const lotSize = data.lotSize || 1;
+  const prev = data.prevClose || data.previousClose || data.ltp || 0;
+  const lotSizeFo = data.lotSize || getLotSize(data.symbol);
+  const ltp = data.ltp || 0;
+  const freezeLots = 100;
   return {
     ...data,
     name: data.name || meta.name || data.symbol,
+    companyName: data.name || meta.name || data.symbol,
     sector: meta.sector,
     isin: meta.isin,
-    marketCap: meta.marketCap,
+    marketCap: data.marketCapLabel || meta.marketCap,
+    peRatio: data.peRatio ?? null,
+    dividendYield: data.dividendYield ?? null,
     upperCircuit: data.upperCircuit || parseFloat((prev * 1.2).toFixed(2)),
     lowerCircuit: data.lowerCircuit || parseFloat((prev * 0.8).toFixed(2)),
-    lotValue: parseFloat(((data.ltp || 0) * lotSize).toFixed(2))
+    lotSize: lotSizeFo,
+    lotSizeCnc: 1,
+    lotSizeMis: lotSizeFo,
+    lotSizeNrml: lotSizeFo,
+    lotValue: parseFloat((ltp * lotSizeFo).toFixed(2)),
+    lotValueCnc: parseFloat(ltp.toFixed(2)),
+    freezeQtyLots: freezeLots,
+    freezeQtyShares: freezeLots * lotSizeFo
   };
 };
 
@@ -241,6 +253,10 @@ const fetchYahooQuote = async (symbol, exchange = 'NSE') => {
       week52High: quote.fiftyTwoWeekHigh || 0,
       week52Low: quote.fiftyTwoWeekLow || 0,
       lotSize: getLotSize(symbol),
+      peRatio: quote.trailingPE != null ? parseFloat(Number(quote.trailingPE).toFixed(2)) : null,
+      dividendYield:
+        quote.dividendYield != null ? parseFloat((Number(quote.dividendYield) * 100).toFixed(2)) : null,
+      marketCapLabel: quote.marketCap ? 'Large' : null,
       timestamp: new Date().toISOString()
     };
   } catch {
@@ -437,6 +453,25 @@ const getSectorList = () => SECTORS;
 const getWatchlistTemplates = () =>
   Object.entries(WATCHLIST_TEMPLATES).map(([key, t]) => ({ key, name: t.name, count: t.symbols.length }));
 
+const { INDEX_CONSTITUENTS } = require('../data/stockMetadata');
+
+const getIndexConstituents = async (key) => {
+  const pack = INDEX_CONSTITUENTS[key];
+  if (!pack) return null;
+  const quotes = await getMultipleQuotes(pack.symbols);
+  const constituents = pack.symbols.map((symbol) => {
+    const meta = enrichStock({ symbol, exchange: 'NSE' });
+    const q = quotes.find((row) => row?.symbol === symbol);
+    return {
+      ...meta,
+      ltp: q?.ltp ?? null,
+      change: q?.change ?? null,
+      changePercent: q?.changePercent ?? null
+    };
+  });
+  return { key, name: pack.name, constituents };
+};
+
 const POPULAR_SEARCHES = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'NIFTY', 'SBIN', 'ITC', 'ICICIBANK'];
 
 const getPopularSearches = () => POPULAR_SEARCHES;
@@ -530,78 +565,301 @@ const getMockHistoricalData = (symbol, period) => {
   return data;
 };
 
+const getUniverseQuotes = async () => {
+  const { NIFTY_50 } = require('../data/stockMetadata');
+  const symbols = [...new Set([...NIFTY_50, ...NSE_SYMBOLS])];
+  return (await getMultipleQuotes(symbols)).filter(Boolean);
+};
+
 const getTopGainers = async () => {
-  const quotes = await getMultipleQuotes(NSE_SYMBOLS.slice(0, 25));
+  const quotes = await getUniverseQuotes();
   return quotes
-    .filter(q => q.changePercent > 0)
+    .filter((q) => q.changePercent > 0)
     .sort((a, b) => b.changePercent - a.changePercent)
     .slice(0, 10);
 };
 
 const getTopLosers = async () => {
-  const quotes = await getMultipleQuotes(NSE_SYMBOLS.slice(0, 25));
+  const quotes = await getUniverseQuotes();
   return quotes
-    .filter(q => q.changePercent < 0)
+    .filter((q) => q.changePercent < 0)
     .sort((a, b) => a.changePercent - b.changePercent)
     .slice(0, 10);
 };
 
-const getIndices = async () => {
-  const yf = await loadYahooFinance();
-  if (!yf?.quote) {
-    return [
-      { symbol: 'NIFTY 50', ltp: 22500 + Math.random() * 500, change: Math.random() * 100 - 50, changePercent: Math.random() * 2 - 1 },
-      { symbol: 'NIFTY BANK', ltp: 48000 + Math.random() * 1000, change: Math.random() * 200 - 100, changePercent: Math.random() * 2 - 1 },
-      { symbol: 'SENSEX', ltp: 74000 + Math.random() * 800, change: Math.random() * 150 - 75, changePercent: Math.random() * 2 - 1 }
-    ];
-  }
+const mapMoverRow = (q, tag) => ({
+  symbol: q.symbol,
+  name: q.name || q.companyName || q.symbol,
+  ltp: q.ltp,
+  changePercent: q.changePercent,
+  week52High: q.week52High,
+  week52Low: q.week52Low,
+  upperCircuit: q.upperCircuit,
+  lowerCircuit: q.lowerCircuit,
+  lotSize: q.lotSize || 1,
+  tag
+});
 
-  const indexMap = [
-    { yahoo: '^NSEI', label: 'NIFTY 50' },
-    { yahoo: '^NSEBANK', label: 'NIFTY BANK' },
-    { yahoo: '^BSESN', label: 'SENSEX' }
-  ];
+const getWeek52Movers = (quotes) => {
+  const high = quotes
+    .filter((q) => q.week52High && q.ltp >= q.week52High * 0.985)
+    .sort((a, b) => b.ltp / b.week52High - a.ltp / a.week52High)
+    .slice(0, 15)
+    .map((q) => mapMoverRow(q, '52w_high'));
+  const low = quotes
+    .filter((q) => q.week52Low && q.ltp <= q.week52Low * 1.015)
+    .sort((a, b) => a.ltp / a.week52Low - b.ltp / b.week52Low)
+    .slice(0, 15)
+    .map((q) => mapMoverRow(q, '52w_low'));
+  return {
+    week52High: high,
+    week52Low: low,
+    counts: { high: high.length, low: low.length }
+  };
+};
+
+const getCircuitStocks = (quotes) => {
+  const upper = quotes
+    .filter((q) => q.upperCircuit && q.ltp >= q.upperCircuit * 0.995)
+    .sort((a, b) => b.changePercent - a.changePercent)
+    .slice(0, 15)
+    .map((q) => mapMoverRow(q, 'upper_circuit'));
+  const lower = quotes
+    .filter((q) => q.lowerCircuit && q.ltp <= q.lowerCircuit * 1.005)
+    .sort((a, b) => a.changePercent - b.changePercent)
+    .slice(0, 15)
+    .map((q) => mapMoverRow(q, 'lower_circuit'));
+  return {
+    upperCircuit: upper,
+    lowerCircuit: lower,
+    counts: { upper: upper.length, lower: lower.length }
+  };
+};
+
+const getCorporateActionsCalendar = () => {
+  const { ACTIONS } = require('../data/corporateActions');
+  const today = new Date().toISOString().slice(0, 10);
+  return ACTIONS.filter((a) => a.exDate >= today).sort((a, b) => a.exDate.localeCompare(b.exDate));
+};
+
+const getMarketDataHub = async () => {
+  const quotes = await getUniverseQuotes();
+  const [status, indices, gainers, losers, overview] = await Promise.all([
+    Promise.resolve(getMarketStatus()),
+    getIndices(),
+    getTopGainers(),
+    getTopLosers(),
+    getMarketOverview()
+  ]);
+
+  const week52 = getWeek52Movers(quotes);
+  const circuits = getCircuitStocks(quotes);
+  const calendars = require('../data/marketCalendars').getAllCalendars();
+  const corporateActions = getCorporateActionsCalendar();
+  const sectoralIndices = indices.filter((idx) =>
+    SECTORAL_INDEX_LABELS.includes(idx.symbol)
+  );
+
+  return {
+    status,
+    indices,
+    sectoralIndices,
+    gainers,
+    losers,
+    overview,
+    week52,
+    circuits,
+    corporateActions,
+    calendars,
+    bulkDeals: calendars.bulkDeals,
+    fiiDii: {
+      available: false,
+      note: 'FII/DII feed not configured — use sector breadth and indices instead.'
+    },
+    disclaimer:
+      'Market data hub uses Nifty universe quotes with live/simulated indices. Calendars and bulk deals are educational simulations.'
+  };
+};
+
+const getMarketOverview = async () => {
+  const quotes = await getUniverseQuotes();
+  let advances = 0;
+  let declines = 0;
+  let unchanged = 0;
+  for (const q of quotes) {
+    const ch = q.changePercent || 0;
+    if (ch > 0.05) advances += 1;
+    else if (ch < -0.05) declines += 1;
+    else unchanged += 1;
+  }
+  const mapRow = (q) => ({
+    symbol: q.symbol,
+    ltp: q.ltp,
+    changePercent: q.changePercent,
+    volume: q.volume || 0,
+    lotSize: q.lotSize || 1,
+    turnover: parseFloat(((q.ltp || 0) * (q.volume || 0)).toFixed(0))
+  });
+  const byVolume = [...quotes].sort((a, b) => (b.volume || 0) - (a.volume || 0)).slice(0, 12).map(mapRow);
+  const byValue = [...quotes]
+    .sort((a, b) => (b.ltp || 0) * (b.volume || 0) - (a.ltp || 0) * (a.volume || 0))
+    .slice(0, 12)
+    .map(mapRow);
+  const byLots = [...quotes]
+    .filter((q) => (q.lotSize || 1) > 1)
+    .sort((a, b) => (b.volume || 0) - (a.volume || 0))
+    .slice(0, 12)
+    .map(mapRow);
+  return {
+    breadth: { advances, declines, unchanged, total: quotes.length },
+    mostActiveByVolume: byVolume,
+    mostActiveByValue: byValue,
+    mostActiveByLots: byLots,
+    disclaimer: 'Breadth and most-active are computed from Nifty 50 universe (paper trading).'
+  };
+};
+
+const INDEX_TARGETS = [
+  { label: 'NIFTY 50', nseKeys: ['NIFTY 50', 'NIFTY50'], yahoo: '^NSEI', base: 22500 },
+  { label: 'NIFTY BANK', nseKeys: ['NIFTY BANK', 'NIFTYBANK'], yahoo: '^NSEBANK', base: 48000 },
+  { label: 'SENSEX', nseKeys: ['SENSEX', 'BSE SENSEX'], yahoo: '^BSESN', base: 74000 },
+  { label: 'NIFTY MIDCAP', nseKeys: ['NIFTY MIDCAP', 'NIFTY MIDCAP 100', 'NIFTYMIDCAP'], yahoo: null, base: 11800 },
+  { label: 'NIFTY SMALLCAP', nseKeys: ['NIFTY SMALLCAP', 'NIFTY SMALLCAP 250'], yahoo: null, base: 17500 },
+  { label: 'NIFTY IT', nseKeys: ['NIFTY IT'], yahoo: null, base: 35200 },
+  { label: 'NIFTY AUTO', nseKeys: ['NIFTY AUTO'], yahoo: null, base: 21800 },
+  { label: 'NIFTY PHARMA', nseKeys: ['NIFTY PHARMA'], yahoo: null, base: 20500 },
+  { label: 'NIFTY FMCG', nseKeys: ['NIFTY FMCG'], yahoo: null, base: 56000 },
+  { label: 'NIFTY METAL', nseKeys: ['NIFTY METAL'], yahoo: null, base: 9200 }
+];
+
+const SECTORAL_INDEX_LABELS = [
+  'NIFTY IT',
+  'NIFTY BANK',
+  'NIFTY AUTO',
+  'NIFTY PHARMA',
+  'NIFTY FMCG',
+  'NIFTY METAL'
+];
+
+const stableSimulatedIndex = ({ label, base }) => {
+  const hourSeed = Math.floor(Date.now() / (15 * 60 * 1000));
+  const drift = Math.sin(hourSeed + label.length) * 0.004;
+  const ltp = parseFloat((base * (1 + drift)).toFixed(2));
+  const change = parseFloat((ltp - base).toFixed(2));
+  const changePercent = parseFloat((drift * 100).toFixed(2));
+  return { symbol: label, ltp, change, changePercent, source: 'simulated' };
+};
+
+const fetchIndicesFromNse = async () => {
+  if (!nseIndia?.getAllIndices) return null;
+  try {
+    const payload = await nseIndia.getAllIndices();
+    const rows = payload?.data || payload || [];
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+
+    const findRow = (keys) =>
+      rows.find((r) => {
+        const name = String(r.index || r.indexSymbol || r.symbol || r.key || '').toUpperCase();
+        return keys.some((k) => name.includes(k.replace(/\s/g, '')) || name === k.toUpperCase());
+      });
+
+    const mapped = INDEX_TARGETS.map((target) => {
+      const row = findRow(target.nseKeys);
+      if (!row) return null;
+      const ltp = parseFloat(row.last ?? row.lastPrice ?? row.ltp ?? row.current ?? 0);
+      if (!ltp) return null;
+      const change = parseFloat(row.variation ?? row.change ?? row.pChange ?? 0);
+      const changePercent = parseFloat(
+        row.percentChange ?? row.pChange ?? row.changePercent ?? (ltp ? (change / ltp) * 100 : 0)
+      );
+      return {
+        symbol: target.label,
+        ltp,
+        change,
+        changePercent,
+        source: 'nse'
+      };
+    }).filter(Boolean);
+
+    return mapped.length >= 2 ? mapped : null;
+  } catch {
+    return null;
+  }
+};
+
+const fetchIndicesFromYahoo = async () => {
+  const yf = await loadYahooFinance();
+  if (!yf?.quote) return null;
+
   const results = await Promise.all(
-    indexMap.map(async ({ yahoo, label }) => {
+    INDEX_TARGETS.map(async ({ yahoo, label }) => {
       try {
         const quote = await yf.quote(yahoo);
+        if (!quote?.regularMarketPrice) return null;
         return {
           symbol: label,
           ltp: quote.regularMarketPrice,
-          change: quote.regularMarketChange,
-          changePercent: quote.regularMarketChangePercent
+          change: quote.regularMarketChange ?? 0,
+          changePercent: quote.regularMarketChangePercent ?? 0,
+          source: 'live'
         };
       } catch {
         return null;
       }
     })
   );
-  return results.filter(Boolean);
+  const filtered = results.filter(Boolean);
+  return filtered.length >= 2 ? filtered : null;
 };
 
-const isMarketOpen = () => {
+const getIndices = async () => {
+  const fromNse = await fetchIndicesFromNse();
+  if (fromNse?.length) return fromNse;
+
+  const fromYahoo = await fetchIndicesFromYahoo();
+  if (fromYahoo?.length) return fromYahoo;
+
+  return INDEX_TARGETS.map(stableSimulatedIndex);
+};
+
+const getIstMinutes = () => {
   const now = new Date();
   const istOffset = 5.5 * 60 * 60 * 1000;
-  const istTime = new Date(now.getTime() + (now.getTimezoneOffset() * 60000) + istOffset);
-
-  const day = istTime.getDay();
-  if (day === 0 || day === 6) return false;
-
-  const hours = istTime.getHours();
-  const minutes = istTime.getMinutes();
-  const currentMins = hours * 60 + minutes;
-
-  const marketStart = 9 * 60 + 15;
-  const marketEnd = 15 * 60 + 30;
-
-  return currentMins >= marketStart && currentMins <= marketEnd;
+  const istTime = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + istOffset);
+  return {
+    day: istTime.getDay(),
+    currentMins: istTime.getHours() * 60 + istTime.getMinutes()
+  };
 };
 
+const getMarketPhase = () => {
+  const { day, currentMins } = getIstMinutes();
+  if (day === 0 || day === 6) return 'closed';
+  const preOpenStart = 9 * 60;
+  const marketStart = 9 * 60 + 15;
+  const marketEnd = 15 * 60 + 30;
+  if (currentMins >= preOpenStart && currentMins < marketStart) return 'pre-open';
+  if (currentMins >= marketStart && currentMins <= marketEnd) return 'open';
+  return 'closed';
+};
+
+const isMarketOpen = () => getMarketPhase() === 'open';
+
 const getMarketStatus = () => {
-  const open = isMarketOpen();
+  const phase = getMarketPhase();
+  const open = phase === 'open';
+  const preOpen = phase === 'pre-open';
+  const message = open
+    ? 'Market is open'
+    : preOpen
+      ? 'Pre-open session'
+      : 'Market is closed';
+
   return {
     isOpen: open,
-    message: open ? 'Market is open' : 'Market is closed',
+    phase,
+    preOpen,
+    message,
     nextOpen: getNextMarketOpen(),
     nextClose: getNextMarketClose()
   };
@@ -640,6 +898,13 @@ const startMarketDataCron = (io) => {
   priceUpdateInterval = setInterval(async () => {
     try {
       const quotes = await getMultipleQuotes(POLL_SYMBOLS);
+
+      try {
+        const { processQuotesForLotChanges } = require('./lotChangeAlerts');
+        await processQuotesForLotChanges(quotes);
+      } catch {
+        /* errors logged inside lotChangeAlerts with cooldown */
+      }
 
       io.emit('priceUpdate', { quotes, timestamp: new Date().toISOString(), marketStatus: getMarketStatus() });
 
@@ -705,9 +970,16 @@ module.exports = {
   getIndices,
   startMarketDataCron,
   isMarketOpen,
+  getMarketPhase,
   getMarketStatus,
   getSectorList,
   getWatchlistTemplates,
+  getIndexConstituents,
   getPopularSearches,
-  getSectorAnalytics
+  getSectorAnalytics,
+  getMarketOverview,
+  getMarketDataHub,
+  getWeek52Movers,
+  getCircuitStocks,
+  getCorporateActionsCalendar
 };

@@ -10,16 +10,24 @@ const getWatchlistItems = async (watchlistId) => {
   return items.rows.map((i) => i.symbol);
 };
 
+const DEFAULT_STARTER_SYMBOLS = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'SBIN'];
+
 const getWatchlists = async (userId) => {
+  const defaultRow = await ensureDefaultWatchlist(userId);
+
   const result = await pool.query(
-    'SELECT * FROM watchlists WHERE user_id = $1 ORDER BY created_at',
+    'SELECT * FROM watchlists WHERE user_id = $1 ORDER BY created_at ASC',
     [userId]
   );
 
   const watchlists = await Promise.all(
     result.rows.map(async (watchlist) => {
       const symbols = await getWatchlistItems(watchlist.id);
-      return { ...watchlist, symbols };
+      return {
+        ...watchlist,
+        symbols,
+        isDefault: watchlist.id === defaultRow.id
+      };
     })
   );
 
@@ -27,9 +35,26 @@ const getWatchlists = async (userId) => {
 };
 
 const ensureDefaultWatchlist = async (userId) => {
-  const existing = await pool.query('SELECT id FROM watchlists WHERE user_id = $1 LIMIT 1', [userId]);
-  if (existing.rows.length > 0) return existing.rows[0];
-  return createWatchlist(userId, 'My Watchlist');
+  const existing = await pool.query(
+    'SELECT * FROM watchlists WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1',
+    [userId]
+  );
+  if (existing.rows.length > 0) {
+    const row = existing.rows[0];
+    const symbols = await getWatchlistItems(row.id);
+    if (symbols.length === 0) {
+      for (const sym of DEFAULT_STARTER_SYMBOLS) {
+        await addToWatchlist(userId, row.id, sym);
+      }
+    }
+    return row;
+  }
+
+  const created = await createWatchlist(userId, 'My Watchlist');
+  for (const sym of DEFAULT_STARTER_SYMBOLS) {
+    await addToWatchlist(userId, created.id, sym);
+  }
+  return created;
 };
 
 const createWatchlist = async (userId, name) => {

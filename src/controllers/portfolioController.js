@@ -10,6 +10,30 @@ const getHoldings = async (req, res, next) => {
   }
 };
 
+const getHoldingsDetail = async (req, res, next) => {
+  try {
+    const { sortBy, filter } = req.query;
+    const data = await portfolioService.getHoldingsDetail(req.user.id, { sortBy, filter });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getHoldingTrades = async (req, res, next) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const trades = await portfolioService.getHoldingTrades(
+      req.user.id,
+      req.params.symbol,
+      limit
+    );
+    res.json(trades);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const getPortfolioSummary = async (req, res, next) => {
   try {
     const summary = await portfolioService.getPortfolioSummary(req.user.id);
@@ -53,6 +77,27 @@ const getIntradayPositions = async (req, res, next) => {
   try {
     const positions = await intradayService.getPositionsForUser(req.user.id);
     res.json(positions);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getPositionsDetail = async (req, res, next) => {
+  try {
+    const data = await intradayService.getPositionsDetail(req.user.id);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getPositionHistory = async (req, res, next) => {
+  try {
+    const history = await intradayService.getPositionBuildHistory(
+      req.user.id,
+      req.params.symbol
+    );
+    res.json(history);
   } catch (err) {
     next(err);
   }
@@ -102,6 +147,20 @@ const exportHoldingsCsv = async (req, res, next) => {
   }
 };
 
+const exportHoldingsReport = async (req, res, next) => {
+  try {
+    const autoPrint = req.query.print === '1' || req.query.print === 'true';
+    const html = await portfolioService.exportHoldingsReportHtml(req.user.id, { autoPrint });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (!autoPrint) {
+      res.setHeader('Content-Disposition', 'attachment; filename=holdings-report.html');
+    }
+    res.send(html);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const exportTradesCsv = async (req, res, next) => {
   try {
     const csv = await portfolioService.exportTradesCsv(req.user.id);
@@ -115,14 +174,19 @@ const exportTradesCsv = async (req, res, next) => {
 
 module.exports = {
   getHoldings,
+  getHoldingsDetail,
+  getHoldingTrades,
   getPortfolioSummary,
   getTradeHistory,
   getPerformance,
   getTimeLoss,
   getIntradayPositions,
+  getPositionsDetail,
+  getPositionHistory,
   squareOffPosition,
   convertMisToCnc,
   squareOffAllPositions,
   exportHoldingsCsv,
+  exportHoldingsReport,
   exportTradesCsv
 };

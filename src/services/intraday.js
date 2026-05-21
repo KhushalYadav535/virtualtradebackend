@@ -124,32 +124,69 @@ const reserveMarginForPendingBuy = async (client, { userId, symbol, qty, price, 
   );
 };
 
+const { enrichPosition, buildTotals, getAutoSquareOffStatus } = require('../utils/positionUtils');
+
 const getPositionsForUser = async (userId) => {
+  const { positions } = await getPositionsDetail(userId);
+  return positions;
+};
+
+const getPositionsDetail = async (userId) => {
   const result = await pool.query(
     'SELECT * FROM intraday_positions WHERE user_id = $1 ORDER BY symbol',
     [userId]
   );
 
-  return Promise.all(
+  const positions = await Promise.all(
     result.rows.map(async (row) => {
       const quote = await getStockQuote(row.symbol);
-      const ltp = quote?.ltp || 0;
-      const invested = parseFloat(row.avg_buy_price) * row.qty;
-      const currentValue = ltp * row.qty;
-      const pnl = currentValue - invested;
-      const pnlPercent = invested > 0 ? (pnl / invested) * 100 : 0;
-      return {
-        ...row,
-        avg_buy_price: parseFloat(row.avg_buy_price),
-        margin_blocked: parseFloat(row.margin_blocked),
-        currentPrice: ltp,
-        currentValue: parseFloat(currentValue.toFixed(2)),
-        investedValue: parseFloat(invested.toFixed(2)),
-        pnl: parseFloat(pnl.toFixed(2)),
-        pnlPercent: parseFloat(pnlPercent.toFixed(2))
-      };
+      return enrichPosition(
+        {
+          ...row,
+          avg_buy_price: parseFloat(row.avg_buy_price),
+          margin_blocked: parseFloat(row.margin_blocked)
+        },
+        quote
+      );
     })
   );
+
+  return {
+    positions,
+    totals: buildTotals(positions),
+    autoSquareOff: getAutoSquareOffStatus()
+  };
+};
+
+const getPositionBuildHistory = async (userId, symbol) => {
+  const sym = String(symbol || '').toUpperCase();
+  const quote = await getStockQuote(sym);
+  const lotSize = quote ? require('../utils/lotUtils').getEffectiveLotSize(quote, 'MIS') : 1;
+
+  const result = await pool.query(
+    `SELECT th.qty, th.trade_price, th.timestamp, th.order_id, o.product_type
+     FROM trade_history th
+     LEFT JOIN orders o ON o.id = th.order_id
+     WHERE th.user_id = $1 AND th.symbol = $2 AND th.trade_type = 'BUY'
+       AND (o.product_type = 'MIS' OR o.id IS NULL)
+       AND th.timestamp >= CURRENT_DATE
+     ORDER BY th.timestamp ASC`,
+    [userId, sym]
+  );
+
+  return result.rows.map((r) => {
+    const qty = parseInt(r.qty, 10);
+    const lots = lotSize > 0 ? qty / lotSize : qty;
+    return {
+      qty,
+      lots: parseFloat(lots.toFixed(2)),
+      lotSize,
+      tradePrice: parseFloat(r.trade_price),
+      timestamp: r.timestamp,
+      orderId: r.order_id,
+      label: `Bought ${lots} lot(s) (${qty} sh) @ ₹${parseFloat(r.trade_price).toFixed(2)}`
+    };
+  });
 };
 
 const squareOffPosition = async (userId, symbol, partialQty = null) => {
@@ -163,7 +200,7 @@ const squareOffPosition = async (userId, symbol, partialQty = null) => {
     const quote = await getStockQuote(symbol);
     if (!quote?.ltp) throw { status: 400, message: 'Unable to fetch price' };
 
-    const lotSize = quote.lotSize || 1;
+    const { validateOrderQuantity } = require('../utils/lotUtils');
     let qtyToClose = pos.qty;
     if (partialQty != null && partialQty !== undefined && partialQty !== '') {
       const pq = parseInt(partialQty, 10);
@@ -173,8 +210,9 @@ const squareOffPosition = async (userId, symbol, partialQty = null) => {
       if (pq > pos.qty) {
         throw { status: 400, message: 'Quantity exceeds open position' };
       }
-      if (pq % lotSize !== 0) {
-        throw { status: 400, message: `Quantity must be multiple of ${lotSize} (lot size)` };
+      const lotCheck = validateOrderQuantity(pq, quote, 'MIS', 'SELL');
+      if (!lotCheck.valid) {
+        throw { status: 400, message: lotCheck.message };
       }
       qtyToClose = pq;
     }
@@ -216,7 +254,7 @@ const convertMisToCnc = async (userId, symbol, convertQty = null) => {
     }
 
     const quote = await getStockQuote(symbol);
-    const lotSize = quote?.lotSize || 1;
+    const { validateOrderQuantity } = require('../utils/lotUtils');
 
     let qty =
       convertQty != null && convertQty !== '' ? parseInt(convertQty, 10) : pos.qty;
@@ -226,8 +264,9 @@ const convertMisToCnc = async (userId, symbol, convertQty = null) => {
     if (qty > pos.qty) {
       throw { status: 400, message: 'Quantity exceeds MIS position' };
     }
-    if (qty % lotSize !== 0) {
-      throw { status: 400, message: `Quantity must be multiple of ${lotSize} (lot size)` };
+    const lotCheck = validateOrderQuantity(qty, quote, 'MIS', 'SELL');
+    if (!lotCheck.valid) {
+      throw { status: 400, message: lotCheck.message };
     }
 
     const avg = parseFloat(pos.avg_buy_price);
@@ -336,6 +375,22 @@ const autoSquareOffAllUsers = async () => {
   }
 };
 
+let lastAutoSquareOffDate = null;
+
+/** Run once per trading day during 3:20–3:25 PM IST window */
+const runScheduledAutoSquareOff = async () => {
+  const { getIstClock } = require('../utils/positionUtils');
+  const { day, minutes, dateKey } = getIstClock();
+  if (day === 0 || day === 6) return;
+  const execStart = 15 * 60 + 20;
+  const execEnd = 15 * 60 + 25;
+  if (minutes < execStart || minutes > execEnd) return;
+  if (lastAutoSquareOffDate === dateKey) return;
+  lastAutoSquareOffDate = dateKey;
+  console.log('✓ Auto square-off MIS positions (3:20 PM IST)');
+  await autoSquareOffAllUsers();
+};
+
 module.exports = {
   MIS_MARGIN_RATE,
   marginFor,
@@ -345,8 +400,11 @@ module.exports = {
   executeSell,
   reserveMarginForPendingBuy,
   getPositionsForUser,
+  getPositionsDetail,
+  getPositionBuildHistory,
   squareOffPosition,
   squareOffAll,
   autoSquareOffAllUsers,
+  runScheduledAutoSquareOff,
   convertMisToCnc
 };

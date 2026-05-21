@@ -1,33 +1,79 @@
 const { pool } = require('../config/database');
 const { getStockQuote } = require('./marketData');
 const intraday = require('./intraday');
+const {
+  buildHoldingRow,
+  buildTotals,
+  buildAnalytics,
+  sortHoldings,
+  filterHoldings
+} = require('../utils/holdingUtils');
+
+const getPendingSellQtyForSymbol = async (userId, symbol) => {
+  const result = await pool.query(
+    `SELECT COALESCE(SUM(qty), 0)::int AS qty FROM orders
+     WHERE user_id = $1 AND symbol = $2 AND order_type = 'SELL' AND status = 'pending'`,
+    [userId, symbol]
+  );
+  return parseInt(result.rows[0]?.qty, 10) || 0;
+};
+
+const enrichHoldingsRows = async (userId, rows) => {
+  return Promise.all(
+    rows.map(async (holding) => {
+      const [quote, pendingSellQty] = await Promise.all([
+        getStockQuote(holding.symbol),
+        getPendingSellQtyForSymbol(userId, holding.symbol)
+      ]);
+      return buildHoldingRow(holding, quote, pendingSellQty);
+    })
+  );
+};
 
 const getHoldings = async (userId) => {
   const result = await pool.query(
     'SELECT * FROM holdings WHERE user_id = $1 ORDER BY symbol',
     [userId]
   );
+  return enrichHoldingsRows(userId, result.rows);
+};
 
-  const holdingsWithLivePrice = await Promise.all(
-    result.rows.map(async (holding) => {
-      const quote = await getStockQuote(holding.symbol);
-      const currentValue = quote ? quote.ltp * holding.qty : 0;
-      const investedValue = holding.avg_buy_price * holding.qty;
-      const pnl = currentValue - investedValue;
-      const pnlPercent = investedValue > 0 ? ((pnl / investedValue) * 100).toFixed(2) : 0;
+const getHoldingsDetail = async (userId, { sortBy = 'pnlPercent', filter = 'all' } = {}) => {
+  const holdingsRaw = await getHoldings(userId);
+  const { getActionsForSymbols, getUpcomingForSymbols } = require('../data/corporateActions');
+  const corpMap = getActionsForSymbols(holdingsRaw.map((h) => h.symbol));
+  const holdings = holdingsRaw.map((h) => {
+    const corporateActions = corpMap[h.symbol] || [];
+    return {
+      ...h,
+      corporateActions,
+      hasCorporateAction: corporateActions.length > 0,
+      corporateActionHint: corporateActions[0]
+        ? `${corporateActions[0].type}: ${corporateActions[0].title} (ex ${corporateActions[0].exDate})`
+        : null
+    };
+  });
+  const filtered = filterHoldings(holdings, filter);
+  const sorted = sortHoldings(filtered, sortBy);
+  const totals = buildTotals(holdings);
+  const analytics = {
+    ...buildAnalytics(holdings),
+    corporateActionsUpcoming: getUpcomingForSymbols(
+      holdings.map((h) => h.symbol),
+      12
+    )
+  };
+  return { holdings: sorted, totals, analytics };
+};
 
-      return {
-        ...holding,
-        currentPrice: quote?.ltp || 0,
-        currentValue,
-        investedValue,
-        pnl: parseFloat(pnl.toFixed(2)),
-        pnlPercent: parseFloat(pnlPercent)
-      };
-    })
+const getHoldingTrades = async (userId, symbol, limit = 50) => {
+  const sym = String(symbol || '').toUpperCase();
+  const result = await pool.query(
+    `SELECT * FROM trade_history WHERE user_id = $1 AND symbol = $2
+     ORDER BY timestamp DESC LIMIT $3`,
+    [userId, sym, limit]
   );
-
-  return holdingsWithLivePrice;
+  return result.rows;
 };
 
 const getPortfolioSummary = async (userId) => {
@@ -307,20 +353,34 @@ const getTimeLossAnalytics = async (userId, period = 'month') => {
 
 const exportHoldingsCsv = async (userId) => {
   const holdings = await getHoldings(userId);
-  const header = 'Symbol,Qty,Avg Buy,Current Price,Invested,Current Value,P&L,P&L %';
+  const header =
+    'Symbol,Name,Sector,Qty,Lots,Fractional Shares,Avg Buy,LTP,Invested,Current Value,P&L,P&L %,Day Change,Tradable CNC,Tradable MIS';
   const rows = holdings.map((h) =>
     [
       h.symbol,
+      `"${(h.name || h.symbol).replace(/"/g, '""')}"`,
+      h.sector,
       h.qty,
-      h.avg_buy_price,
+      h.completeLots,
+      h.fractionalShares,
+      h.avgBuyPrice,
       h.currentPrice,
       h.investedValue,
       h.currentValue,
       h.pnl,
-      h.pnlPercent
+      h.pnlPercent,
+      h.dayChange,
+      h.tradableQtyCnc,
+      h.tradableQtyMis
     ].join(',')
   );
   return [header, ...rows].join('\n');
+};
+
+const exportHoldingsReportHtml = async (userId, { autoPrint = false } = {}) => {
+  const detail = await getHoldingsDetail(userId);
+  const { buildHoldingsReportHtml } = require('../utils/holdingsReportHtml');
+  return buildHoldingsReportHtml(detail, { autoPrint });
 };
 
 const exportTradesCsv = async (userId) => {
@@ -348,10 +408,13 @@ const exportTradesCsv = async (userId) => {
 
 module.exports = {
   getHoldings,
+  getHoldingsDetail,
+  getHoldingTrades,
   getPortfolioSummary,
   getTradeHistory,
   getPortfolioPerformance,
   getTimeLossAnalytics,
   exportHoldingsCsv,
+  exportHoldingsReportHtml,
   exportTradesCsv
 };

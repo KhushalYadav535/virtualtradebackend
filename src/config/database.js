@@ -243,6 +243,20 @@ const initDatabase = async () => {
       CREATE INDEX IF NOT EXISTS idx_price_alerts_status ON price_alerts(status);
       CREATE INDEX IF NOT EXISTS idx_notifications_user ON in_app_notifications(user_id);
 
+      CREATE TABLE IF NOT EXISTS symbol_lot_cache (
+        symbol VARCHAR(20) PRIMARY KEY,
+        lot_size INTEGER NOT NULL,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS lot_change_events (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        symbol VARCHAR(20) NOT NULL,
+        old_lot_size INTEGER NOT NULL,
+        new_lot_size INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
       ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(15) UNIQUE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB DEFAULT '{"orders":true,"alerts":true,"achievements":true,"marketing":false}'::jsonb;
@@ -250,6 +264,8 @@ const initDatabase = async () => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS trading_prefs JSONB DEFAULT '{}'::jsonb;
 
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_amo BOOLEAN DEFAULT false;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS disclosed_qty INTEGER;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS reject_reason VARCHAR(255);
 
       ALTER TABLE price_alerts ADD COLUMN IF NOT EXISTS alert_kind VARCHAR(20) DEFAULT 'price';
       ALTER TABLE price_alerts ADD COLUMN IF NOT EXISTS min_volume BIGINT;

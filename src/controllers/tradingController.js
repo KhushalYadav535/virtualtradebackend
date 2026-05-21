@@ -13,7 +13,8 @@ const orderSchema = z.object({
   productType: z.enum(['CNC', 'MIS', 'NRML', 'BO', 'CO']).optional(),
   validity: z.enum(['DAY', 'IOC', 'GTT']).optional(),
   exchange: z.string().optional(),
-  isAmo: z.boolean().optional()
+  isAmo: z.boolean().optional(),
+  disclosedQty: z.number().int().positive().optional()
 });
 
 const chargesSchema = z.object({
@@ -33,7 +34,14 @@ const placeOrder = async (req, res, next) => {
       validity: parsed.validity || 'DAY',
       exchange: parsed.exchange || 'NSE'
     });
-    res.status(201).json({ message: 'Order placed successfully', order });
+    res.status(201).json({
+      message: order.is_amo
+        ? 'AMO queued — will execute when market opens'
+        : order.validity === 'GTT'
+          ? 'GTT order placed — active until triggered'
+          : 'Order placed successfully',
+      order
+    });
   } catch (err) {
     next(err);
   }
@@ -44,6 +52,34 @@ const getOrders = async (req, res, next) => {
     const limit = parseInt(req.query.limit) || 50;
     const orders = await tradingService.getOrders(req.user.id, limit);
     res.json(orders);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getOrdersBook = async (req, res, next) => {
+  try {
+    const q = req.query;
+    const book = await tradingService.getOrdersBook(req.user.id, {
+      limit: parseInt(q.limit, 10) || 300,
+      status: q.status || 'all',
+      product: q.product || 'all',
+      symbol: q.symbol || '',
+      validity: q.validity || 'all',
+      lotFilter: q.lotFilter || 'all',
+      todayOnly: q.todayOnly === 'true' || q.status === 'executed_today',
+      sortBy: q.sortBy || 'time'
+    });
+    res.json(book);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getOrderById = async (req, res, next) => {
+  try {
+    const order = await tradingService.getOrderById(req.user.id, req.params.orderId);
+    res.json(order);
   } catch (err) {
     next(err);
   }
@@ -82,6 +118,31 @@ const getCharges = async (req, res, next) => {
   }
 };
 
+const lotPreviewSchema = z.object({
+  symbol: z.string().min(1),
+  productType: z.enum(['CNC', 'MIS', 'NRML', 'BO', 'CO']).optional(),
+  qty: z.coerce.number().int().nonnegative().optional(),
+  orderType: z.enum(['BUY', 'SELL']).optional(),
+  price: z.coerce.number().positive().optional()
+});
+
+const getLotPreview = async (req, res, next) => {
+  try {
+    const parsed = lotPreviewSchema.parse(req.query);
+    const preview = await tradingService.getLotPreview({
+      symbol: parsed.symbol,
+      productType: parsed.productType || 'CNC',
+      qty: parsed.qty ?? 0,
+      orderType: parsed.orderType || 'BUY',
+      price: parsed.price ?? null,
+      userId: req.user?.id ?? null
+    });
+    res.json(preview);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const modifyOrder = async (req, res, next) => {
   try {
     const { orderId } = req.params;
@@ -93,4 +154,13 @@ const modifyOrder = async (req, res, next) => {
   }
 };
 
-module.exports = { placeOrder, getOrders, cancelOrder, modifyOrder, getCharges };
+module.exports = {
+  placeOrder,
+  getOrders,
+  getOrdersBook,
+  getOrderById,
+  cancelOrder,
+  modifyOrder,
+  getCharges,
+  getLotPreview
+};
