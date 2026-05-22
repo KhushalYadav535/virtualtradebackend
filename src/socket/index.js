@@ -26,9 +26,11 @@ const setupSocket = (io) => {
       priceBroadcastSec: 5
     });
 
+    // Send lightweight init data instead of full stock list
+    const indices = await getIndices().catch(() => []);
     socket.emit('init', {
-      stocks: await getStockList(),
-      indices: await getIndices()
+      stocks: [],
+      indices
     });
 
     socket.on('subscribe', async (symbol) => {

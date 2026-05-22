@@ -24,8 +24,14 @@ const authenticate = async (req, res, next) => {
 
     user.role = String(user.role || 'student').toLowerCase();
     req.user = user;
-    const { updateActivity } = require('../services/auth');
-    await updateActivity(user.id);
+    // Fire-and-forget activity update (throttled to once per 5 min)
+    if (!authenticate._lastActivity) authenticate._lastActivity = {};
+    const now = Date.now();
+    if (!authenticate._lastActivity[user.id] || now - authenticate._lastActivity[user.id] > 300000) {
+      authenticate._lastActivity[user.id] = now;
+      const { updateActivity } = require('../services/auth');
+      updateActivity(user.id).catch(() => {});
+    }
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {

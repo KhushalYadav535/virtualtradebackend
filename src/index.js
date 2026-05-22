@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const compression = require('compression');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const routes = require('./routes');
@@ -23,6 +24,7 @@ const { getAllowedOrigins, corsOriginDelegate } = require('./config/cors');
 
 const app = express();
 app.set('trust proxy', 1);
+app.use(compression());
 const allowedOrigins = getAllowedOrigins();
 const httpServer = createServer(app);
 

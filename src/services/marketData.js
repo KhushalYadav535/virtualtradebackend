@@ -915,9 +915,9 @@ const startMarketDataCron = (io) => {
     } catch (err) {
       console.error('Price update error:', err.message);
     }
-  }, 5000);
+  }, 15000);
 
-  console.log('✓ Market data cron started (5s interval)');
+  console.log('✓ Market data cron started (15s interval)');
 
   setTimeout(() => {
     const { getLiveCorporateActions, getFiiDii } = require('./nseLiveFeeds');

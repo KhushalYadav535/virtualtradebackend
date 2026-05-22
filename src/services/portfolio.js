@@ -77,37 +77,31 @@ const getHoldingTrades = async (userId, symbol, limit = 50) => {
 };
 
 const getPortfolioSummary = async (userId) => {
-  const walletResult = await pool.query(
-    'SELECT * FROM wallets WHERE user_id = $1',
-    [userId]
-  );
+  // Run independent DB queries in parallel
+  const [walletResult, batchResult, holdings, dayPnLResult] = await Promise.all([
+    pool.query('SELECT * FROM wallets WHERE user_id = $1', [userId]),
+    pool.query(
+      `SELECT b.start_balance FROM users u
+       LEFT JOIN batches b ON u.batch_id = b.id WHERE u.id = $1`,
+      [userId]
+    ),
+    getHoldings(userId),
+    pool.query(
+      `SELECT COALESCE(SUM(
+         CASE WHEN trade_type = 'SELL' THEN pnl
+              WHEN trade_type = 'BUY' THEN 0
+         END
+       ), 0) as day_realized
+      FROM trade_history
+      WHERE user_id = $1 AND timestamp >= CURRENT_DATE`,
+      [userId]
+    )
+  ]);
 
   const wallet = walletResult.rows[0] || { balance: 0, total_invested: 0, total_profit: 0 };
-
-  const batchResult = await pool.query(
-    `SELECT b.start_balance FROM users u
-     LEFT JOIN batches b ON u.batch_id = b.id WHERE u.id = $1`,
-    [userId]
-  );
   const startBalance = parseFloat(batchResult.rows[0]?.start_balance || 1000000);
-
-  const holdings = await getHoldings(userId);
   const holdingsValue = holdings.reduce((sum, h) => sum + h.currentValue, 0);
   const investedValue = holdings.reduce((sum, h) => sum + h.investedValue, 0);
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-const dayPnLResult = await pool.query(
-    `SELECT COALESCE(SUM(
-       CASE WHEN trade_type = 'SELL' THEN pnl
-            WHEN trade_type = 'BUY' THEN 0
-       END
-     ), 0) as day_realized
-    FROM trade_history
-    WHERE user_id = $1 AND timestamp >= $2`,
-    [userId, today]
-  );
 
   const dayPnL = parseFloat(dayPnLResult.rows[0]?.day_realized || 0);
   const dayUnrealizedPnL = holdings.reduce((sum, h) => {
