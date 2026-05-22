@@ -8,6 +8,8 @@ router.use(authorize('admin', 'trainer'));
 
 router.get('/students', adminController.getAllStudents);
 router.get('/students/:studentId', adminController.getStudentDetails);
+router.post('/students', adminController.createStudent);
+router.post('/students/:studentId/add-funds', adminController.addFunds);
 router.post('/batch', adminController.createBatch);
 router.get('/batch', adminController.getBatches);
 router.put('/batch/:batchId', adminController.updateBatch);
@@ -31,5 +33,7 @@ router.get('/segmentation', authorize('admin'), adminController.getSegmentation)
 router.put('/students/:userId/segment', authorize('admin'), adminController.setSegment);
 router.get('/ab-tests', authorize('admin'), adminController.getAbTests);
 router.patch('/ab-tests', authorize('admin'), adminController.updateAbTests);
+router.get('/custom-market-data', authorize('admin'), adminController.getCustomMarketData);
+router.post('/custom-market-data', authorize('admin'), adminController.updateCustomMarketData);
 
 module.exports = router;

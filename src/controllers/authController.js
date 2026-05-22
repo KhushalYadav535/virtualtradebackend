@@ -178,6 +178,20 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
+const resetInitialPassword = async (req, res, next) => {
+  try {
+    const { email, oldPassword, newPassword } = z.object({
+      email: z.string().email(),
+      oldPassword: z.string(),
+      newPassword: z.string().min(8).max(100)
+    }).parse(req.body);
+    await authService.resetInitialPassword(email, oldPassword, newPassword);
+    res.json({ message: 'Initial password reset successfully' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const resendOTP = async (req, res, next) => {
   try {
     const { email, purpose } = z.object({
@@ -384,5 +398,5 @@ module.exports = {
   changePassword, getProfile, updateProfile, getPreferences, exportUserData,
   getSessions, revokeSession, revokeAllSessions, updateActivity, deleteAccount, verifyEmail,
   sendMobileOTP, registerWithPhone, loginWithPhone,
-  setOrderPin, clearOrderPin, getOrderPinStatus, listDevices
+  setOrderPin, clearOrderPin, getOrderPinStatus, listDevices, resetInitialPassword
 };

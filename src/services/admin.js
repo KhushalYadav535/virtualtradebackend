@@ -528,6 +528,46 @@ const upsertLotSize = async (symbol, lotSize) => {
   return { symbol: sym, lotSize: size, previous: oldLot || null };
 };
 
+const createStudent = async (name, email, password, batchId) => {
+  const { register } = require('./auth');
+  const user = await register(name, email, password, 'student', batchId);
+  await pool.query('UPDATE users SET force_password_reset = true, is_verified = true WHERE id = $1', [user.id]);
+  return user;
+};
+
+const addFunds = async (studentId, amount) => {
+  const parsed = parseFloat(amount);
+  if (isNaN(parsed) || parsed <= 0) throw { status: 400, message: 'Invalid amount' };
+  const res = await pool.query('UPDATE wallets SET balance = balance + $1 WHERE user_id = $2 RETURNING *', [parsed, studentId]);
+  if (res.rows.length === 0) throw { status: 404, message: 'Wallet not found' };
+  return res.rows[0];
+};
+
+const getCustomMarketData = async () => {
+  const indicesRes = await pool.query("SELECT value FROM app_settings WHERE key = 'custom_indices'");
+  const stocksRes = await pool.query("SELECT value FROM app_settings WHERE key = 'custom_stocks'");
+  const removedRes = await pool.query("SELECT value FROM app_settings WHERE key = 'removed_stocks'");
+  
+  return {
+    customIndices: indicesRes.rows[0]?.value || [],
+    customStocks: stocksRes.rows[0]?.value || [],
+    removedStocks: removedRes.rows[0]?.value || []
+  };
+};
+
+const updateCustomMarketData = async (data) => {
+  if (data.customIndices) {
+    await pool.query("INSERT INTO app_settings (key, value) VALUES ('custom_indices', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()", [JSON.stringify(data.customIndices)]);
+  }
+  if (data.customStocks) {
+    await pool.query("INSERT INTO app_settings (key, value) VALUES ('custom_stocks', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()", [JSON.stringify(data.customStocks)]);
+  }
+  if (data.removedStocks) {
+    await pool.query("INSERT INTO app_settings (key, value) VALUES ('removed_stocks', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()", [JSON.stringify(data.removedStocks)]);
+  }
+  return await getCustomMarketData();
+};
+
 module.exports = {
   getAllStudents,
   getStudentDetails,
@@ -547,5 +587,9 @@ module.exports = {
   getLotSizeMaster,
   upsertLotSize,
   syncLotSizes,
-  DEFAULT_FEATURE_FLAGS
+  DEFAULT_FEATURE_FLAGS,
+  createStudent,
+  addFunds,
+  getCustomMarketData,
+  updateCustomMarketData
 };

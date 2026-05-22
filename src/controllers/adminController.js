@@ -233,6 +233,34 @@ const updateAbTests = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const getCustomMarketData = async (req, res, next) => {
+  try {
+    res.json(await adminService.getCustomMarketData());
+  } catch (err) { next(err); }
+};
+
+const updateCustomMarketData = async (req, res, next) => {
+  try {
+    res.json(await adminService.updateCustomMarketData(req.body));
+  } catch (err) { next(err); }
+};
+
+const createStudent = async (req, res, next) => {
+  try {
+    const { name, email, password, batchId } = req.body;
+    const student = await adminService.createStudent(name, email, password, batchId);
+    res.status(201).json(student);
+  } catch (err) { next(err); }
+};
+
+const addFunds = async (req, res, next) => {
+  try {
+    const { amount } = req.body;
+    const wallet = await adminService.addFunds(req.params.studentId, amount);
+    res.json(wallet);
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getAllStudents, getStudentDetails, createBatch, getBatches,
   updateBatch, assignStudentBatch, banStudent, activateStudent,
@@ -240,5 +268,6 @@ module.exports = {
   getAnalytics, getRecentOrders, getLotLogs,
   getFeatureFlags, updateFeatureFlags, getLotSizes, updateLotSize,
   syncLotSizes,
-  getRevenue, getTickets, replyTicket, getSegmentation, setSegment, getAbTests, updateAbTests
+  getRevenue, getTickets, replyTicket, getSegmentation, setSegment, getAbTests, updateAbTests,
+  getCustomMarketData, updateCustomMarketData, createStudent, addFunds
 };

@@ -76,6 +76,7 @@ try {
 }
 
 const { cachePrice, getCachedPrice, cacheStockList, getCachedStockList } = require('../config/redis');
+const { pool } = require('../config/database');
 
 const POLL_SYMBOLS = [
   'RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL', 'KOTAKBANK',
@@ -402,7 +403,32 @@ const buildFullStockList = async () => {
     fetchNseStockList(),
     fetchBseStockList()
   ]);
-  return [...nseStocks, ...bseStocks];
+  
+  let merged = [...nseStocks, ...bseStocks];
+  
+  try {
+    const customRes = await pool.query("SELECT value FROM app_settings WHERE key = 'custom_stocks'");
+    if (customRes.rows.length > 0 && Array.isArray(customRes.rows[0].value)) {
+      const customs = customRes.rows[0].value.map(s => ({
+        symbol: String(s.symbol || '').toUpperCase(),
+        name: s.name || s.symbol,
+        exchange: s.exchange || 'NSE',
+        lotSize: parseInt(s.lotSize, 10) || 1,
+        source: 'custom'
+      })).filter(s => s.symbol);
+      merged = [...merged, ...customs];
+    }
+    
+    const removedRes = await pool.query("SELECT value FROM app_settings WHERE key = 'removed_stocks'");
+    if (removedRes.rows.length > 0 && Array.isArray(removedRes.rows[0].value)) {
+      const removedSet = new Set(removedRes.rows[0].value.map(s => String(s.symbol || s).toUpperCase()));
+      merged = merged.filter(s => !removedSet.has(s.symbol));
+    }
+  } catch (err) {
+    console.error('Error fetching custom/removed stocks:', err);
+  }
+  
+  return merged;
 };
 
 const searchStocks = async (query, options = {}) => {
@@ -815,13 +841,36 @@ const fetchIndicesFromYahoo = async () => {
 };
 
 const getIndices = async () => {
+  let targets = [...INDEX_TARGETS];
+  try {
+    const customRes = await pool.query("SELECT value FROM app_settings WHERE key = 'custom_indices'");
+    if (customRes.rows.length > 0 && Array.isArray(customRes.rows[0].value)) {
+      targets = [...targets, ...customRes.rows[0].value.map(c => ({
+        label: c.label,
+        nseKeys: c.nseKeys || [c.label],
+        yahoo: c.yahoo || null,
+        base: c.base || 1000
+      }))];
+    }
+  } catch (err) {
+    console.error('Error fetching custom indices:', err);
+  }
+
   const fromNse = await fetchIndicesFromNse();
-  if (fromNse?.length) return fromNse;
+  if (fromNse?.length) {
+    const nseLabels = new Set(fromNse.map(i => i.symbol));
+    const missing = targets.filter(t => !nseLabels.has(t.label)).map(stableSimulatedIndex);
+    return [...fromNse, ...missing];
+  }
 
   const fromYahoo = await fetchIndicesFromYahoo();
-  if (fromYahoo?.length) return fromYahoo;
+  if (fromYahoo?.length) {
+    const yhLabels = new Set(fromYahoo.map(i => i.symbol));
+    const missing = targets.filter(t => !yhLabels.has(t.label)).map(stableSimulatedIndex);
+    return [...fromYahoo, ...missing];
+  }
 
-  return INDEX_TARGETS.map(stableSimulatedIndex);
+  return targets.map(stableSimulatedIndex);
 };
 
 const getIstMinutes = () => {

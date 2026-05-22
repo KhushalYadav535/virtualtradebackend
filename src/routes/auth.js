@@ -12,6 +12,7 @@ router.post('/verify-email', authController.verifyEmail);
 router.post('/password/reset-request', authController.requestPasswordReset);
 router.post('/password/reset-verify', authController.verifyPasswordResetOTP);
 router.post('/password/reset', authController.resetPassword);
+router.post('/password/reset-initial', authController.resetInitialPassword);
 router.post('/resend-otp', authController.resendOTP);
 
 router.post('/mobile/send-otp', authController.sendMobileOTP);

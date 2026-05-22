@@ -91,6 +91,10 @@ const login = async (email, password, deviceInfo = null, browser = null, ip = nu
     return { requiresVerification: true, email };
   }
 
+  if (user.force_password_reset) {
+    return { forcePasswordReset: true, email: user.email };
+  }
+
   if (user.totp_secret) {
     return { requires2FA: true, userId: user.id };
   }
@@ -337,6 +341,21 @@ const changePassword = async (userId, oldPassword, newPassword) => {
   return true;
 };
 
+const resetInitialPassword = async (email, oldPassword, newPassword) => {
+  const result = await pool.query('SELECT id, password_hash, force_password_reset FROM users WHERE email = $1', [email]);
+  if (result.rows.length === 0) throw { status: 404, message: 'User not found' };
+  
+  const user = result.rows[0];
+  if (!user.force_password_reset) throw { status: 400, message: 'No forced reset required' };
+  
+  const isValid = await bcrypt.compare(oldPassword, user.password_hash);
+  if (!isValid) throw { status: 401, message: 'Invalid current password' };
+  
+  const newHash = await bcrypt.hash(newPassword, 12);
+  await pool.query('UPDATE users SET password_hash = $1, force_password_reset = false, updated_at = NOW() WHERE id = $2', [newHash, user.id]);
+  return true;
+};
+
 const getSessions = async (userId) => {
   const result = await pool.query(
     `SELECT id, device_info, browser, ip_address, is_current, created_at, last_active
@@ -570,7 +589,7 @@ const verifyEmail = async (email) => {
 module.exports = {
   register, login, verify2FA, setup2FA, disable2FA,
   refreshAccessToken, generateOTP, resendOTP, verifyOTP,
-  resetPasswordWithOTP, changePassword,
+  resetPasswordWithOTP, changePassword, resetInitialPassword,
   getSessions, revokeSession, revokeAllSessions, updateActivity, verifyEmail,
   getUserProfile, updateProfile, deleteAccount,
   generatePhoneOTP, registerWithPhone, loginWithPhone

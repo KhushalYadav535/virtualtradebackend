@@ -259,6 +259,7 @@ const initDatabase = async () => {
 
       ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(15) UNIQUE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS force_password_reset BOOLEAN DEFAULT false;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB DEFAULT '{"orders":true,"alerts":true,"achievements":true,"marketing":false}'::jsonb;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS locale VARCHAR(10) DEFAULT 'en';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS trading_prefs JSONB DEFAULT '{}'::jsonb;
