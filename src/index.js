@@ -22,6 +22,7 @@ const { checkAllPriceAlerts } = require('./services/priceAlerts');
 const { getAllowedOrigins, corsOriginDelegate } = require('./config/cors');
 
 const app = express();
+app.set('trust proxy', 1);
 const allowedOrigins = getAllowedOrigins();
 const httpServer = createServer(app);
 
