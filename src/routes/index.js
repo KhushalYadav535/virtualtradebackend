@@ -16,7 +16,17 @@ const achievementsRoutes = require('./achievements');
 const alertsRoutes = require('./alerts');
 const notificationsRoutes = require('./notifications');
 const activityRoutes = require('./activity');
+const legalRoutes = require('./legal');
+const advancedRoutes = require('./advanced');
+const systemRoutes = require('./system');
+const feedbackRoutes = require('./feedback');
+const offlineRoutes = require('./offline');
+const portfolioMgmtRoutes = require('./portfolioMgmt');
+const supportRoutes = require('./support');
 
+router.use('/legal', legalRoutes);
+router.use('/advanced', advancedRoutes);
+router.use('/system', systemRoutes);
 router.use('/auth', authRoutes);
 router.use('/wallet', walletRoutes);
 router.use('/market', marketRoutes);
@@ -31,5 +41,9 @@ router.use('/achievements', achievementsRoutes);
 router.use('/alerts', alertsRoutes);
 router.use('/notifications', notificationsRoutes);
 router.use('/activity', activityRoutes);
+router.use('/feedback', feedbackRoutes);
+router.use('/offline', offlineRoutes);
+router.use('/portfolios', portfolioMgmtRoutes);
+router.use('/support', supportRoutes);
 
 module.exports = router;

@@ -7,6 +7,7 @@ router.use(authenticate);
 
 router.get('/unread-count', notificationsController.getUnreadCount);
 router.post('/read-all', notificationsController.markAllRead);
+router.delete('/', notificationsController.clearAll);
 router.get('/', notificationsController.listNotifications);
 router.patch('/:id/read', notificationsController.markRead);
 

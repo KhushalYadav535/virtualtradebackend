@@ -1,6 +1,8 @@
 const authService = require('../services/auth');
 const { pool } = require('../config/database');
 const { sendOTPEmail } = require('../services/email');
+const securityService = require('../services/securityService');
+const orderPinService = require('../services/orderPinService');
 const { z } = require('zod');
 
 const registerSchema = z.object({
@@ -8,12 +10,20 @@ const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(100),
   role: z.enum(['student', 'trainer']).optional(),
-  batchId: z.string().uuid().optional()
+  batchId: z.string().uuid().optional(),
+  referralCode: z.string().min(4).max(12).optional()
 });
 
 const loginSchema = z.object({
   email: z.string().email(),
-  password: z.string()
+  password: z.string(),
+  deviceFingerprint: z.string().max(500).optional(),
+  deviceLabel: z.string().max(120).optional()
+});
+
+const orderPinSchema = z.object({
+  pin: z.string().length(4),
+  password: z.string().min(1)
 });
 
 const verify2FASchema = z.object({
@@ -49,8 +59,8 @@ const mobileLoginSchema = z.object({
 
 const register = async (req, res, next) => {
   try {
-    const { name, email, password, role, batchId } = registerSchema.parse(req.body);
-    const user = await authService.register(name, email, password, role, batchId);
+    const { name, email, password, role, batchId, referralCode } = registerSchema.parse(req.body);
+    const user = await authService.register(name, email, password, role, batchId, referralCode);
     res.status(201).json({ message: 'Registration successful', user });
   } catch (err) {
     next(err);
@@ -59,9 +69,29 @@ const register = async (req, res, next) => {
 
 const login = async (req, res, next) => {
   try {
-    const { email, password } = loginSchema.parse(req.body);
-    const result = await authService.login(email, password);
-    res.json(result);
+    const { email, password, deviceFingerprint, deviceLabel } = loginSchema.parse(req.body);
+    await securityService.checkSuspiciousLogin(email);
+    try {
+      const result = await authService.login(
+        email,
+        password,
+        deviceLabel || 'Web',
+        req.headers['user-agent'],
+        req.ip
+      );
+      await securityService.recordLoginAttempt(email, true, req.ip);
+      if (result.user?.id && deviceFingerprint) {
+        await securityService.registerDevice(
+          result.user.id,
+          deviceFingerprint,
+          deviceLabel || req.headers['user-agent']?.slice(0, 80) || 'Web'
+        );
+      }
+      res.json(result);
+    } catch (loginErr) {
+      await securityService.recordLoginAttempt(email, false, req.ip);
+      throw loginErr;
+    }
   } catch (err) {
     next(err);
   }
@@ -186,6 +216,31 @@ const updateProfile = async (req, res, next) => {
   }
 };
 
+const getPreferences = async (req, res, next) => {
+  try {
+    const { mergeTradingPrefs, DEFAULT_TRADING_PREFS } = require('../utils/tradingPrefs');
+    const user = await authService.getUserProfile(req.user.id);
+    res.json({
+      locale: user.locale || 'en',
+      notificationPrefs: user.notificationPrefs || {},
+      tradingPrefs: mergeTradingPrefs(user.tradingPrefs),
+      defaults: DEFAULT_TRADING_PREFS
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const exportUserData = async (req, res, next) => {
+  try {
+    const { exportUserData: buildExport } = require('../services/userExport');
+    const data = await buildExport(req.user.id);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+};
+
 const getSessions = async (req, res, next) => {
   try {
     const sessions = await authService.getSessions(req.user.id);
@@ -280,10 +335,49 @@ const loginWithPhone = async (req, res, next) => {
   }
 };
 
+const setOrderPin = async (req, res, next) => {
+  try {
+    const { pin, password } = orderPinSchema.parse(req.body);
+    const result = await orderPinService.setOrderPin(req.user.id, pin, password);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const clearOrderPin = async (req, res, next) => {
+  try {
+    const { password } = z.object({ password: z.string().min(1) }).parse(req.body);
+    const result = await orderPinService.clearOrderPin(req.user.id, password);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getOrderPinStatus = async (req, res, next) => {
+  try {
+    const required = await orderPinService.requiresOrderPin(req.user.id);
+    res.json({ required, enabled: required });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const listDevices = async (req, res, next) => {
+  try {
+    const devices = await securityService.listDevices(req.user.id);
+    res.json(devices);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   register, login, verify2FA, setup2FA, disable2FA,
   refreshToken, requestPasswordReset, verifyPasswordResetOTP, resetPassword, resendOTP,
-  changePassword, getProfile, updateProfile, getSessions, revokeSession,
-  revokeAllSessions, updateActivity, deleteAccount, verifyEmail,
-  sendMobileOTP, registerWithPhone, loginWithPhone
+  changePassword, getProfile, updateProfile, getPreferences, exportUserData,
+  getSessions, revokeSession, revokeAllSessions, updateActivity, deleteAccount, verifyEmail,
+  sendMobileOTP, registerWithPhone, loginWithPhone,
+  setOrderPin, clearOrderPin, getOrderPinStatus, listDevices
 };

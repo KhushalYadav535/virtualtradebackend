@@ -11,6 +11,7 @@ router.get('/overview', marketController.getMarketOverview);
 router.get('/data-hub', marketController.getMarketDataHub);
 router.get('/calendars', marketController.getCalendars);
 router.get('/corporate-actions', marketController.getCorporateActions);
+router.get('/fii-dii', marketController.getFiiDii);
 router.get('/popular-searches', marketController.getPopularSearches);
 router.get('/search', optionalAuth, marketController.searchStocks);
 router.get('/recent-searches', authenticate, marketController.getRecentSearches);

@@ -21,7 +21,18 @@ const getStartingBalance = async (batchId) => {
   return parseFloat(batch.rows[0].start_balance) || DEFAULT_BALANCE;
 };
 
-const register = async (name, email, password, role = 'student', batchId = null) => {
+const register = async (name, email, password, role = 'student', batchId = null, referralCode = null) => {
+  try {
+    const { getFeatureFlags } = require('./admin');
+    const flags = await getFeatureFlags();
+    if (flags.maintenanceMode) throw { status: 503, message: 'Registration is temporarily disabled' };
+    if (!flags.allowNewRegistrations && role === 'student') {
+      throw { status: 403, message: 'New registrations are currently closed' };
+    }
+  } catch (e) {
+    if (e.status) throw e;
+  }
+
   const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
   if (existing.rows.length > 0) {
     throw { status: 409, message: 'Email already registered' };
@@ -44,6 +55,11 @@ const register = async (name, email, password, role = 'student', batchId = null)
 
   const { ensureDefaultWatchlist } = require('./watchlist');
   await ensureDefaultWatchlist(user.id);
+
+  if (referralCode) {
+    const { applyReferralCode } = require('./gamification');
+    await applyReferralCode(user.id, referralCode).catch(() => {});
+  }
 
   const otp = await generateOTP(email, 'verification');
   await sendOTPEmail(email, otp, 'verification');
@@ -440,7 +456,7 @@ const getUserProfile = async (userId) => {
     last_activity: row.last_activity,
     notificationPrefs: row.notification_prefs,
     locale: row.locale || 'en',
-    tradingPrefs: row.trading_prefs && typeof row.trading_prefs === 'object' ? row.trading_prefs : {},
+    tradingPrefs: require('../utils/tradingPrefs').mergeTradingPrefs(row.trading_prefs),
     has2FA: row.has_2fa
   };
 };
@@ -501,8 +517,9 @@ const updateProfile = async (userId, data = {}) => {
   }
 
   if (data.tradingPrefs != null && typeof data.tradingPrefs === 'object') {
+    const { sanitizeTradingPrefs } = require('../utils/tradingPrefs');
     sets.push(`trading_prefs = COALESCE(trading_prefs, '{}'::jsonb) || $${i}::jsonb`);
-    params.push(JSON.stringify(data.tradingPrefs));
+    params.push(JSON.stringify(sanitizeTradingPrefs(data.tradingPrefs)));
   }
 
   if (!sets.length) throw { status: 400, message: 'No profile fields to update' };
@@ -527,7 +544,7 @@ const updateProfile = async (userId, data = {}) => {
     is_verified: row.is_verified,
     notificationPrefs: row.notification_prefs,
     locale: row.locale,
-    tradingPrefs: row.trading_prefs && typeof row.trading_prefs === 'object' ? row.trading_prefs : {}
+    tradingPrefs: require('../utils/tradingPrefs').mergeTradingPrefs(row.trading_prefs)
   };
 };
 

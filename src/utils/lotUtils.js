@@ -15,21 +15,27 @@ const getFreezeQtyShares = (quote, productType = 'CNC') => {
   return getFreezeQtyLots(quote) * lotSize;
 };
 
-const snapQuantityToLot = (qty, lotSize, side = 'BUY') => {
+const snapQuantityToLot = (qty, lotSize, side = 'BUY', rounding = null) => {
   const n = parseInt(qty, 10) || 0;
   if (n <= 0 || lotSize <= 0) return { qty: lotSize, adjusted: true };
   if (n % lotSize === 0) return { qty: n, adjusted: false };
 
-  const fullLots = Math.floor(n / lotSize);
-  const snapped =
-    String(side).toUpperCase() === 'SELL'
-      ? Math.max(lotSize, fullLots * lotSize)
-      : Math.max(lotSize, (fullLots + 1) * lotSize);
+  let mode = rounding;
+  if (!mode || !['up', 'down', 'nearest'].includes(mode)) {
+    mode = String(side).toUpperCase() === 'SELL' ? 'down' : 'up';
+  }
 
+  const ratio = n / lotSize;
+  let lots;
+  if (mode === 'down') lots = Math.max(1, Math.floor(ratio));
+  else if (mode === 'nearest') lots = Math.max(1, Math.round(ratio));
+  else lots = Math.max(1, Math.ceil(ratio));
+
+  const snapped = lots * lotSize;
   return {
     qty: snapped,
     adjusted: true,
-    message: `Quantity adjusted to ${snapped} shares (${snapped / lotSize} lot(s) × ${lotSize})`
+    message: `Quantity adjusted to ${snapped} shares (${lots} lot(s) × ${lotSize})`
   };
 };
 
@@ -91,6 +97,19 @@ const buildLotPreview = (quote, productType, qty, orderType, price, availableBal
       ? Math.max(0, Math.floor(availableBalance / marginPerLot))
       : 0;
 
+  const warnings = [];
+  const avgVolume = quote?.volume || 0;
+  if (avgVolume > 0 && validation.valid) {
+    const volumePct = parseFloat(((shares / avgVolume) * 100).toFixed(2));
+    if (volumePct > 5) {
+      warnings.push(`Large order: ${lots} lot(s) = ${volumePct}% of daily average volume`);
+    }
+  }
+  const lotValueThreshold = 1000000;
+  if (lotValue > lotValueThreshold && validation.valid) {
+    warnings.push(`Lot value exceeds ₹${(lotValueThreshold / 100000).toFixed(0)}L. Consider splitting order.`);
+  }
+
   return {
     productType: pt,
     lotSize,
@@ -102,7 +121,8 @@ const buildLotPreview = (quote, productType, qty, orderType, price, availableBal
     orderValue,
     marginPerLot,
     maxLots,
-    validation
+    validation,
+    warnings
   };
 };
 

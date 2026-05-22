@@ -636,10 +636,11 @@ const getCircuitStocks = (quotes) => {
   };
 };
 
-const getCorporateActionsCalendar = () => {
-  const { ACTIONS } = require('../data/corporateActions');
+const getCorporateActionsCalendar = async (extraSymbols = [], { forceRefresh = false } = {}) => {
+  const { getLiveCorporateActions } = require('./nseLiveFeeds');
+  const { actions } = await getLiveCorporateActions(extraSymbols, { forceRefresh });
   const today = new Date().toISOString().slice(0, 10);
-  return ACTIONS.filter((a) => a.exDate >= today).sort((a, b) => a.exDate.localeCompare(b.exDate));
+  return actions.filter((a) => a.exDate >= today).sort((a, b) => a.exDate.localeCompare(b.exDate));
 };
 
 const getMarketDataHub = async () => {
@@ -655,7 +656,10 @@ const getMarketDataHub = async () => {
   const week52 = getWeek52Movers(quotes);
   const circuits = getCircuitStocks(quotes);
   const calendars = require('../data/marketCalendars').getAllCalendars();
-  const corporateActions = getCorporateActionsCalendar();
+  const [corporateActions, fiiDii] = await Promise.all([
+    getCorporateActionsCalendar(),
+    require('./nseLiveFeeds').getFiiDii()
+  ]);
   const sectoralIndices = indices.filter((idx) =>
     SECTORAL_INDEX_LABELS.includes(idx.symbol)
   );
@@ -672,12 +676,10 @@ const getMarketDataHub = async () => {
     corporateActions,
     calendars,
     bulkDeals: calendars.bulkDeals,
-    fiiDii: {
-      available: false,
-      note: 'FII/DII feed not configured — use sector breadth and indices instead.'
-    },
+    fiiDii,
+    corporateActionsSource: corporateActions[0]?.source || 'education_calendar',
     disclaimer:
-      'Market data hub uses Nifty universe quotes with live/simulated indices. Calendars and bulk deals are educational simulations.'
+      'Market data hub uses Nifty universe quotes with live/simulated indices. FII/DII and corp actions from NSE when available; IPO/lot calendars may be educational.'
   };
 };
 
@@ -916,6 +918,14 @@ const startMarketDataCron = (io) => {
   }, 5000);
 
   console.log('✓ Market data cron started (5s interval)');
+
+  setTimeout(() => {
+    const { getLiveCorporateActions, getFiiDii } = require('./nseLiveFeeds');
+    getFiiDii().catch(() => {});
+    getLiveCorporateActions([], { forceRefresh: true }).catch((err) =>
+      console.warn('Corp actions warm cache:', err.message)
+    );
+  }, 15000);
 };
 
 
@@ -981,5 +991,6 @@ module.exports = {
   getMarketDataHub,
   getWeek52Movers,
   getCircuitStocks,
-  getCorporateActionsCalendar
+  getCorporateActionsCalendar,
+  getLotSize
 };

@@ -185,14 +185,15 @@ const checkAllPriceAlerts = async () => {
       const title = `Alert: ${alert.symbol}`;
       const body = `${describeAlert(alert)}. LTP ₹${ltp.toFixed(2)}`;
 
-      await notificationService.createNotification(alert.user_id, {
+      const { notifyUser } = require('./alertNotifications');
+      await notifyUser(alert.user_id, {
         type: 'price_alert',
+        category: 'alerts',
         title,
         body,
-        metadata: { symbol: alert.symbol, alertId: alert.id, ltp }
+        metadata: { symbol: alert.symbol, alertId: alert.id, ltp },
+        url: '/dashboard/alerts'
       });
-
-      sendNotification(alert.user_id, { title, body, url: '/dashboard/alerts' }).catch(() => {});
     } catch (err) {
       console.error(`Price alert check ${alert.id}:`, err.message);
     }

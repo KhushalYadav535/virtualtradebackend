@@ -11,6 +11,8 @@ router.get('/orders/book', tradingController.getOrdersBook);
 router.get('/orders/:orderId', tradingController.getOrderById);
 router.get('/charges', tradingController.getCharges);
 router.get('/lot-preview', tradingController.getLotPreview);
+router.get('/hedge-benefit', tradingController.getHedgeBenefit);
+router.get('/spread-margin', tradingController.getSpreadMarginBenefit);
 router.put('/order/:orderId', tradingController.modifyOrder);
 router.delete('/order/:orderId', tradingController.cancelOrder);
 

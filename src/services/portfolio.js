@@ -151,12 +151,61 @@ const dayPnLResult = await pool.query(
   };
 };
 
-const getTradeHistory = async (userId, limit = 100) => {
+const fetchTradesWithOrders = async (userId, limit) => {
   const result = await pool.query(
-    `SELECT * FROM trade_history WHERE user_id = $1 ORDER BY timestamp DESC LIMIT $2`,
+    `SELECT th.*, o.product_type, o.order_mode, o.exchange
+     FROM trade_history th
+     LEFT JOIN orders o ON o.id = th.order_id
+     WHERE th.user_id = $1
+     ORDER BY th.timestamp DESC
+     LIMIT $2`,
     [userId, limit]
   );
   return result.rows;
+};
+
+const loadQuotesForSymbols = async (symbols) => {
+  const { getMultipleQuotes } = require('./marketData');
+  const map = {};
+  for (let i = 0; i < symbols.length; i += 50) {
+    const chunk = symbols.slice(i, i + 50);
+    const quotes = await getMultipleQuotes(chunk);
+    quotes.forEach((q) => {
+      if (q?.symbol) map[q.symbol] = q;
+    });
+  }
+  return map;
+};
+
+const getTradeBook = async (userId, opts = {}) => {
+  const {
+    enrichTrade,
+    filterTrades,
+    buildSummary,
+    buildDailySummary,
+    buildMonthlySummary,
+    buildLotAnalytics
+  } = require('../utils/tradeBookUtils');
+
+  const limit = Math.min(parseInt(opts.limit, 10) || 5000, 5000);
+  const rows = await fetchTradesWithOrders(userId, limit);
+  const symbols = [...new Set(rows.map((r) => r.symbol))];
+  const quoteMap = await loadQuotesForSymbols(symbols);
+  let trades = rows.map((r) => enrichTrade(r, quoteMap[r.symbol]));
+  trades = filterTrades(trades, opts);
+
+  return {
+    trades,
+    summary: buildSummary(trades),
+    dailySummary: buildDailySummary(trades),
+    monthlySummary: buildMonthlySummary(trades),
+    lotAnalytics: buildLotAnalytics(trades)
+  };
+};
+
+const getTradeHistory = async (userId, limit = 100) => {
+  const { trades } = await getTradeBook(userId, { limit });
+  return trades;
 };
 
 const getPortfolioPerformance = async (userId, days = 30) => {
@@ -383,27 +432,57 @@ const exportHoldingsReportHtml = async (userId, { autoPrint = false } = {}) => {
   return buildHoldingsReportHtml(detail, { autoPrint });
 };
 
-const exportTradesCsv = async (userId) => {
-  const result = await pool.query(
-    `SELECT id, order_id, symbol, qty, trade_price, trade_type, pnl, timestamp
-     FROM trade_history WHERE user_id = $1 ORDER BY timestamp DESC`,
-    [userId]
-  );
+const exportTradesCsv = async (userId, opts = {}) => {
+  const { trades } = await getTradeBook(userId, { ...opts, limit: 5000 });
   const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const header = 'Trade ID,Order ID,Symbol,Quantity,Price,Side,P&L,Date/Time';
-  const rows = result.rows.map((r) =>
+  const header =
+    'Trade ID,Order ID,Symbol,Product,Lots,Lot Size,Qty,Price,Per Lot Value,Total Value,Side,P&L,P&L Per Lot,Charges,Net Amount,Margin,Date/Time';
+  const rows = trades.map((t) =>
     [
-      r.id,
-      r.order_id || '',
-      esc(r.symbol),
-      r.qty,
-      r.trade_price,
-      esc(r.trade_type),
-      r.pnl ?? 0,
-      esc(r.timestamp)
+      t.id,
+      t.orderId || '',
+      esc(t.symbol),
+      t.productType,
+      t.lots,
+      t.lotSize,
+      t.qty,
+      t.price,
+      t.perLotValue,
+      t.totalValue,
+      esc(t.tradeType),
+      t.pnl,
+      t.pnlPerLot,
+      t.charges?.total ?? 0,
+      t.netAmount,
+      t.marginUsed,
+      esc(t.timestamp)
     ].join(',')
   );
   return [header, ...rows].join('\n');
+};
+
+const exportTradeBookTaxHtml = async (userId, opts = {}) => {
+  const userRes = await pool.query('SELECT name, email FROM users WHERE id = $1', [userId]);
+  const user = userRes.rows[0] || {};
+  const data = await getTradeBook(userId, { ...opts, limit: 5000 });
+  const periodLabel =
+    opts.dateFilter === 'today'
+      ? 'Today'
+      : opts.dateFilter === 'week'
+        ? 'Last 7 days'
+        : opts.dateFilter === 'month'
+          ? 'This month'
+          : 'All time';
+  const { buildTradeBookTaxHtml } = require('../utils/tradeBookReportHtml');
+  return buildTradeBookTaxHtml(
+    {
+      summary: data.summary,
+      trades: data.trades,
+      userName: user.name || user.email,
+      periodLabel
+    },
+    { autoPrint: opts.autoPrint }
+  );
 };
 
 module.exports = {
@@ -412,9 +491,11 @@ module.exports = {
   getHoldingTrades,
   getPortfolioSummary,
   getTradeHistory,
+  getTradeBook,
   getPortfolioPerformance,
   getTimeLossAnalytics,
   exportHoldingsCsv,
   exportHoldingsReportHtml,
-  exportTradesCsv
+  exportTradesCsv,
+  exportTradeBookTaxHtml
 };

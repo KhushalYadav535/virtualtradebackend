@@ -4,7 +4,8 @@ const listNotifications = async (req, res, next) => {
   try {
     const unreadOnly = req.query.unreadOnly === 'true';
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-    const items = await notificationService.listNotifications(req.user.id, { limit, unreadOnly });
+    const type = req.query.type || undefined;
+    const items = await notificationService.listNotifications(req.user.id, { limit, unreadOnly, type });
     res.json(items);
   } catch (err) {
     next(err);
@@ -38,9 +39,19 @@ const markAllRead = async (req, res, next) => {
   }
 };
 
+const clearAll = async (req, res, next) => {
+  try {
+    const result = await notificationService.clearAll(req.user.id);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   listNotifications,
   getUnreadCount,
   markRead,
-  markAllRead
+  markAllRead,
+  clearAll
 };

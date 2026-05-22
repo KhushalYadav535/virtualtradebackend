@@ -22,6 +22,7 @@ const authenticate = async (req, res, next) => {
       return res.status(403).json({ error: 'Account has been deactivated' });
     }
 
+    user.role = String(user.role || 'student').toLowerCase();
     req.user = user;
     const { updateActivity } = require('../services/auth');
     await updateActivity(user.id);
@@ -39,7 +40,8 @@ const authorize = (...roles) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
-    if (!roles.includes(req.user.role)) {
+    const role = String(req.user.role || '').toLowerCase();
+    if (!roles.map((r) => String(r).toLowerCase()).includes(role)) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     next();

@@ -194,7 +194,19 @@ const getCalendars = async (req, res, next) => {
 
 const getCorporateActions = async (req, res, next) => {
   try {
-    res.json(marketService.getCorporateActionsCalendar());
+    const symbols = req.query.symbols ? String(req.query.symbols).split(',').map((s) => s.trim()) : [];
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const actions = await marketService.getCorporateActionsCalendar(symbols, { forceRefresh });
+    res.json({ actions, count: actions.length });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getFiiDii = async (req, res, next) => {
+  try {
+    const data = await require('../services/nseLiveFeeds').getFiiDii();
+    res.json(data);
   } catch (err) {
     next(err);
   }
@@ -223,5 +235,6 @@ module.exports = {
   getMarketOverview,
   getMarketDataHub,
   getCalendars,
-  getCorporateActions
+  getCorporateActions,
+  getFiiDii
 };

@@ -1,4 +1,5 @@
 const adminService = require('../services/admin');
+const adminExtended = require('../services/adminExtended');
 
 const getAllStudents = async (req, res, next) => {
   try {
@@ -103,8 +104,141 @@ const exportTrades = async (req, res, next) => {
   }
 };
 
+const getAnalytics = async (req, res, next) => {
+  try {
+    const data = await adminService.getAnalytics(req.user.id, req.user.role);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getRecentOrders = async (req, res, next) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 80;
+    const orders = await adminService.getRecentOrders(req.user.id, req.user.role, limit);
+    res.json(orders);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getLotLogs = async (req, res, next) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 80;
+    const logs = await adminService.getLotValidationLogs(req.user.id, req.user.role, limit);
+    res.json(logs);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getFeatureFlags = async (req, res, next) => {
+  try {
+    res.json(await adminService.getFeatureFlags());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateFeatureFlags = async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only admins can change feature flags' });
+    }
+    const flags = await adminService.updateFeatureFlags(req.body);
+    res.json(flags);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getLotSizes = async (req, res, next) => {
+  try {
+    res.json(await adminService.getLotSizeMaster());
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateLotSize = async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only admins can edit lot sizes' });
+    }
+    const { symbol, lotSize } = req.body;
+    const row = await adminService.upsertLotSize(symbol, lotSize);
+    res.json(row);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const syncLotSizes = async (req, res, next) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Only admins can sync lot sizes' });
+    }
+    const result = await adminService.syncLotSizes();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getRevenue = async (req, res, next) => {
+  try {
+    const data = await adminExtended.getRevenueSummary();
+    res.json(data);
+  } catch (err) { next(err); }
+};
+
+const getTickets = async (req, res, next) => {
+  try {
+    const tickets = await adminExtended.listAllTickets(req.query.status);
+    res.json(tickets);
+  } catch (err) { next(err); }
+};
+
+const replyTicket = async (req, res, next) => {
+  try {
+    const ticket = await adminExtended.replyTicket(req.params.ticketId, req.body.reply, req.body.status);
+    res.json(ticket);
+  } catch (err) { next(err); }
+};
+
+const getSegmentation = async (req, res, next) => {
+  try {
+    res.json(await adminExtended.getSegmentationStats());
+  } catch (err) { next(err); }
+};
+
+const setSegment = async (req, res, next) => {
+  try {
+    await adminExtended.setUserSegment(req.params.userId, req.body.segment);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+};
+
+const getAbTests = async (req, res, next) => {
+  try {
+    res.json(await adminExtended.getAbTestStats());
+  } catch (err) { next(err); }
+};
+
+const updateAbTests = async (req, res, next) => {
+  try {
+    await adminExtended.updateAbTests(req.body);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getAllStudents, getStudentDetails, createBatch, getBatches,
   updateBatch, assignStudentBatch, banStudent, activateStudent,
-  getLeaderboard, exportTrades
+  getLeaderboard, exportTrades,
+  getAnalytics, getRecentOrders, getLotLogs,
+  getFeatureFlags, updateFeatureFlags, getLotSizes, updateLotSize,
+  syncLotSizes,
+  getRevenue, getTickets, replyTicket, getSegmentation, setSegment, getAbTests, updateAbTests
 };

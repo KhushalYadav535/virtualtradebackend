@@ -25,7 +25,7 @@ const getPendingMisSellQty = async (client, userId, symbol, excludeOrderId = nul
   return parseInt(result.rows[0].qty, 10) || 0;
 };
 
-const executeBuy = async (client, { userId, symbol, exchange, qty, price, orderId, wallet }) => {
+const executeBuy = async (client, { userId, symbol, exchange, qty, price, orderId, wallet, portfolioId = null }) => {
   const notional = price * qty;
   const margin = marginFor(notional);
   const balanceAfter = parseFloat(wallet.balance) - margin;
@@ -53,20 +53,20 @@ const executeBuy = async (client, { userId, symbol, exchange, qty, price, orderI
     );
   } else {
     await client.query(
-      `INSERT INTO intraday_positions (user_id, symbol, exchange, qty, avg_buy_price, margin_blocked)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId, symbol, exchange, qty, price, margin]
+      `INSERT INTO intraday_positions (user_id, symbol, exchange, qty, avg_buy_price, margin_blocked, portfolio_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [userId, symbol, exchange, qty, price, margin, portfolioId]
     );
   }
 
   await client.query(
-    `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl)
-     VALUES ($1, $2, $3, $4, $5, 'BUY', 0)`,
-    [userId, orderId, symbol, qty, price]
+    `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl, portfolio_id)
+     VALUES ($1, $2, $3, $4, $5, 'BUY', 0, $6)`,
+    [userId, orderId, symbol, qty, price, portfolioId]
   );
 };
 
-const executeSell = async (client, { userId, symbol, qty, price, orderId, wallet }) => {
+const executeSell = async (client, { userId, symbol, qty, price, orderId, wallet, portfolioId = null }) => {
   const pos = await getPosition(client, userId, symbol);
   if (!pos || pos.qty < qty) {
     throw { status: 400, message: 'Insufficient intraday position' };
@@ -104,9 +104,9 @@ const executeSell = async (client, { userId, symbol, qty, price, orderId, wallet
   }
 
   await client.query(
-    `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl)
-     VALUES ($1, $2, $3, $4, $5, 'SELL', $6)`,
-    [userId, orderId, symbol, qty, price, pnl]
+    `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl, portfolio_id)
+     VALUES ($1, $2, $3, $4, $5, 'SELL', $6, $7)`,
+    [userId, orderId, symbol, qty, price, pnl, portfolioId]
   );
 };
 

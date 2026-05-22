@@ -183,18 +183,22 @@ const creditWallet = async (userId, amount, description) => {
       'UPDATE wallets SET balance = $1, last_updated = NOW() WHERE user_id = $2',
       [newBalance, userId]
     );
+    const creditDesc =
+      description ||
+      `Virtual funds added (lots affordable ~${lotsBefore} → ${lotsAfter})`;
     await client.query(
       `INSERT INTO wallet_transactions (user_id, type, amount, balance_after, description)
        VALUES ($1, 'credit', $2, $3, $4)`,
-      [
-        userId,
-        amt,
-        newBalance,
-        description ||
-          `Virtual funds added (lots affordable ~${lotsBefore} → ${lotsAfter})`
-      ]
+      [userId, amt, newBalance, creditDesc]
     );
     await client.query('COMMIT');
+    const { notifyFundMovement } = require('./alertNotifications');
+    notifyFundMovement(userId, {
+      type: 'credit',
+      amount: amt,
+      balanceAfter: newBalance,
+      description: creditDesc
+    }).catch(() => {});
     return { balance: newBalance, lotsAffordableBefore: lotsBefore, lotsAffordableAfter: lotsAfter };
   } catch (err) {
     await client.query('ROLLBACK');

@@ -17,6 +17,8 @@ router.get('/holdings/export', portfolioController.exportHoldingsCsv);
 router.get('/holdings/:symbol/trades', portfolioController.getHoldingTrades);
 router.get('/holdings', portfolioController.getHoldings);
 router.get('/summary', portfolioController.getPortfolioSummary);
+router.get('/trade-book', portfolioController.getTradeBook);
+router.get('/trades/export/report', portfolioController.exportTradeBookTaxReport);
 router.get('/trades/export', portfolioController.exportTradesCsv);
 router.get('/trades', portfolioController.getTradeHistory);
 router.get('/performance', portfolioController.getPerformance);

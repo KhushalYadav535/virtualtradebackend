@@ -20,6 +20,12 @@ const setupSocket = (io) => {
   io.on('connection', async (socket) => {
     console.log(`Socket connected: ${socket.id}`);
 
+    socket.emit('connectionStatus', {
+      status: 'connected',
+      serverTime: new Date().toISOString(),
+      priceBroadcastSec: 5
+    });
+
     socket.emit('init', {
       stocks: await getStockList(),
       indices: await getIndices()

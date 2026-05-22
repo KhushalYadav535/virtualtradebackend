@@ -45,7 +45,7 @@ const getPendingSellQty = async (client, userId, symbol, excludeOrderId = null) 
 const placeOrder = async ({
   userId, symbol, qty, orderType, price = null, triggerPrice = null, targetPrice = null, stoplossPrice = null,
   orderMode = PLACE_MARKET, productType = 'CNC', validity = 'DAY', exchange = 'NSE', parentOrderId = null,
-  isAmo = false, disclosedQty = null
+  isAmo = false, disclosedQty = null, portfolioId = null
 }) => {
   const client = await pool.connect();
   try {
@@ -111,6 +111,8 @@ const placeOrder = async ({
 
     const lotCheck = validateOrderQuantity(qty, quote, productType, orderType);
     if (!lotCheck.valid) {
+      const { notifyOrderRejectedLot } = require('./alertNotifications');
+      notifyOrderRejectedLot(userId, symbol, lotCheck.message, qty, productType).catch(() => {});
       throw { status: 400, message: lotCheck.message };
     }
 
@@ -128,6 +130,14 @@ const placeOrder = async ({
     const buyRequired = isMIS ? intraday.marginFor(totalCost) : totalCost;
 
     if (orderType === 'BUY' && parseFloat(wallet.balance) < buyRequired) {
+      const { notifyInsufficientMargin } = require('./alertNotifications');
+      notifyInsufficientMargin(userId, {
+        symbol,
+        qty,
+        productType: effectiveProduct,
+        required: buyRequired,
+        available: parseFloat(wallet.balance)
+      }).catch(() => {});
       throw { status: 400, message: isMIS ? 'Insufficient margin for MIS order' : 'Insufficient balance' };
     }
 
@@ -169,13 +179,13 @@ const placeOrder = async ({
     }
 
     const orderResult = await client.query(
-      `INSERT INTO orders (user_id, symbol, exchange, qty, order_type, order_mode, price, trigger_price, target_price, stoploss_price, product_type, validity, parent_order_id, status, executed_price, executed_at, is_amo, disclosed_qty, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+      `INSERT INTO orders (user_id, symbol, exchange, qty, order_type, order_mode, price, trigger_price, target_price, stoploss_price, product_type, validity, parent_order_id, portfolio_id, status, executed_price, executed_at, is_amo, disclosed_qty, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
        RETURNING *`,
       [
         userId, symbol, exchange, qty, orderType, orderMode, price, triggerPrice, targetPrice, stoplossPrice,
         effectiveProduct === 'BO' || effectiveProduct === 'CO' ? 'MIS' : effectiveProduct,
-        orderValidity, parentOrderId, status, executedPrice, executedAt, isAmoOrder, disclosed
+        orderValidity, parentOrderId, portfolioId, status, executedPrice, executedAt, isAmoOrder, disclosed
       ]
     );
     const order = orderResult.rows[0];
@@ -189,7 +199,8 @@ const placeOrder = async ({
           qty,
           price: currentPrice,
           orderId: order.id,
-          wallet
+          wallet,
+          portfolioId
         });
       } else {
         const newInvested = parseFloat(wallet.total_invested || 0) + totalCost;
@@ -215,15 +226,15 @@ const placeOrder = async ({
           );
         } else {
           await client.query(
-            'INSERT INTO holdings (user_id, symbol, qty, avg_buy_price) VALUES ($1, $2, $3, $4)',
-            [userId, symbol, qty, currentPrice]
+            'INSERT INTO holdings (user_id, symbol, qty, avg_buy_price, portfolio_id) VALUES ($1, $2, $3, $4, $5)',
+            [userId, symbol, qty, currentPrice, portfolioId]
           );
         }
 
         await client.query(
-          `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl)
-           VALUES ($1, $2, $3, $4, $5, 'BUY', 0)`,
-          [userId, order.id, symbol, qty, currentPrice]
+          `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl, portfolio_id)
+           VALUES ($1, $2, $3, $4, $5, 'BUY', 0, $6)`,
+          [userId, order.id, symbol, qty, currentPrice, portfolioId]
         );
       }
     } else if (executeNow && orderType === 'SELL') {
@@ -234,7 +245,8 @@ const placeOrder = async ({
           qty,
           price: currentPrice,
           orderId: order.id,
-          wallet
+          wallet,
+          portfolioId
         });
       } else {
         const holding = holdingResult.rows[0];
@@ -263,9 +275,9 @@ const placeOrder = async ({
         }
 
         await client.query(
-          `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl)
-           VALUES ($1, $2, $3, $4, $5, 'SELL', $6)`,
-          [userId, order.id, symbol, qty, currentPrice, pnl]
+          `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl, portfolio_id)
+           VALUES ($1, $2, $3, $4, $5, 'SELL', $6, $7)`,
+          [userId, order.id, symbol, qty, currentPrice, pnl, portfolioId]
         );
       }
     } else if (status === 'pending' && orderType === 'BUY') {
@@ -305,9 +317,9 @@ const placeOrder = async ({
     await client.query('COMMIT');
 
     try {
-      const { sendOrderNotification } = require('./pushNotifications');
-      sendOrderNotification(userId, order).catch(err => console.log('Push notification error:', err.message));
-      
+      const { notifyOrderUpdate } = require('./alertNotifications');
+      notifyOrderUpdate(userId, order, order.status).catch(() => {});
+
       const { checkAndAwardAchievements } = require('./achievements');
       checkAndAwardAchievements(userId).catch(e => console.error(e));
     } catch (e) {}
@@ -337,6 +349,8 @@ const fillExecutedOrder = async (client, order, executedPrice) => {
     [order.user_id, order.symbol]
   );
 
+  const portfolioId = order.portfolio_id;
+
   if (order.order_type === 'BUY') {
     if (isMIS) {
       await intraday.executeBuy(client, {
@@ -346,7 +360,8 @@ const fillExecutedOrder = async (client, order, executedPrice) => {
         qty: order.qty,
         price: executedPrice,
         orderId: order.id,
-        wallet
+        wallet,
+        portfolioId
       });
     } else {
       const refundDiff = Math.max(0, reservedCost - totalCost);
@@ -372,15 +387,15 @@ const fillExecutedOrder = async (client, order, executedPrice) => {
         );
       } else {
         await client.query(
-          'INSERT INTO holdings (user_id, symbol, qty, avg_buy_price) VALUES ($1, $2, $3, $4)',
-          [order.user_id, order.symbol, order.qty, executedPrice]
+          'INSERT INTO holdings (user_id, symbol, qty, avg_buy_price, portfolio_id) VALUES ($1, $2, $3, $4, $5)',
+          [order.user_id, order.symbol, order.qty, executedPrice, portfolioId]
         );
       }
 
       await client.query(
-        `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl)
-         VALUES ($1, $2, $3, $4, $5, 'BUY', 0)`,
-        [order.user_id, order.id, order.symbol, order.qty, executedPrice]
+        `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl, portfolio_id)
+         VALUES ($1, $2, $3, $4, $5, 'BUY', 0, $6)`,
+        [order.user_id, order.id, order.symbol, order.qty, executedPrice, portfolioId]
       );
     }
   } else if (order.order_type === 'SELL') {
@@ -391,7 +406,8 @@ const fillExecutedOrder = async (client, order, executedPrice) => {
         qty: order.qty,
         price: executedPrice,
         orderId: order.id,
-        wallet
+        wallet,
+        portfolioId
       });
     } else if (holdingResult.rows.length > 0) {
       const holding = holdingResult.rows[0];
@@ -418,9 +434,9 @@ const fillExecutedOrder = async (client, order, executedPrice) => {
       }
 
       await client.query(
-        `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl)
-         VALUES ($1, $2, $3, $4, $5, 'SELL', $6)`,
-        [order.user_id, order.id, order.symbol, order.qty, executedPrice, pnl]
+        `INSERT INTO trade_history (user_id, order_id, symbol, qty, trade_price, trade_type, pnl, portfolio_id)
+         VALUES ($1, $2, $3, $4, $5, 'SELL', $6, $7)`,
+        [order.user_id, order.id, order.symbol, order.qty, executedPrice, pnl, portfolioId]
       );
     }
   }
@@ -450,8 +466,16 @@ const executePendingOrderFill = async (order, executedPrice) => {
     if (order.order_type === 'SELL') {
       const ok = await canExecuteSell(client, order);
       if (!ok) {
-        await client.query("UPDATE orders SET status = 'rejected' WHERE id = $1", [order.id]);
+        const reason = 'Insufficient holdings for sell order';
+        await client.query(
+          `UPDATE orders SET status = 'rejected', reject_reason = $2 WHERE id = $1`,
+          [order.id, reason]
+        );
         await client.query('COMMIT');
+        const { notifyOrderUpdate } = require('./alertNotifications');
+        notifyOrderUpdate(order.user_id, { ...order, status: 'rejected', reject_reason: reason }, 'rejected').catch(
+          () => {}
+        );
         return;
       }
     }
@@ -466,8 +490,23 @@ const executePendingOrderFill = async (order, executedPrice) => {
       return;
     }
 
-    await fillExecutedOrder(client, updated.rows[0], executedPrice);
+    const filled = updated.rows[0];
+    await fillExecutedOrder(client, filled, executedPrice);
     await client.query('COMMIT');
+
+    const { notifyOrderUpdate, notifyTargetOrStop } = require('./alertNotifications');
+    notifyOrderUpdate(order.user_id, filled, 'executed').catch(() => {});
+
+    if (filled.parent_order_id) {
+      const parentRes = await pool.query('SELECT * FROM orders WHERE id = $1', [filled.parent_order_id]);
+      const parent = parentRes.rows[0];
+      if (parent?.target_price && filled.order_mode === 'limit') {
+        notifyTargetOrStop(order.user_id, filled, 'target').catch(() => {});
+      }
+      if (parent?.stoploss_price && ['sl', 'sl-m'].includes(filled.order_mode)) {
+        notifyTargetOrStop(order.user_id, filled, 'stoploss').catch(() => {});
+      }
+    }
 
     const { checkAndAwardAchievements } = require('./achievements');
     checkAndAwardAchievements(order.user_id).catch(() => {});
@@ -653,7 +692,10 @@ const cancelOrder = async (userId, orderId) => {
     );
 
     await client.query('COMMIT');
-    return { ...order, status: 'cancelled' };
+    const cancelled = { ...order, status: 'cancelled' };
+    const { notifyOrderUpdate } = require('./alertNotifications');
+    notifyOrderUpdate(userId, cancelled, 'cancelled').catch(() => {});
+    return cancelled;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;

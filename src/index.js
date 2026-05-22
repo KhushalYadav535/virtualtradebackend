@@ -69,7 +69,14 @@ const authLimiter = rateLimit({
   message: { error: 'Too many auth attempts, please try again later.' }
 });
 
+const adminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: isProduction ? 120 : 500,
+  message: { error: 'Admin API rate limit exceeded' }
+});
+
 app.use('/api/auth', authLimiter);
+app.use('/api/admin', adminLimiter);
 app.use('/api/', apiLimiter);
 
 app.use('/api', routes);
@@ -90,6 +97,14 @@ let isRedisReady = false;
 async function startServer() {
   try {
     await initDatabase();
+    const { ensureAchievementRows } = require('./services/gamification');
+    await ensureAchievementRows().catch((e) => console.warn('Achievement seed:', e.message));
+    const { ensureSecurityTables } = require('./services/securityService');
+    const { ensureScanAlertTables } = require('./services/scanAlerts');
+    const { ensureAdminExtendedTables } = require('./services/adminExtended');
+    await ensureSecurityTables().catch((e) => console.warn('Security tables:', e.message));
+    await ensureScanAlertTables().catch((e) => console.warn('Scan alert tables:', e.message));
+    await ensureAdminExtendedTables().catch((e) => console.warn('Admin extended tables:', e.message));
     console.log('✓ Database connected');
     isDbReady = true;
   } catch (err) {
@@ -105,6 +120,7 @@ async function startServer() {
   }
 
   setupSocket(io);
+  app.set('io', io);
 
   if (isRedisReady) {
     startMarketDataCron(io);
@@ -113,17 +129,41 @@ async function startServer() {
   const runCron = (label, fn) =>
     fn().catch((err) => console.error(`${label} cron error:`, err.message));
 
+  const {
+    runScheduledNotificationChecks,
+    runDailyNotificationChecks
+  } = require('./services/scheduledNotifications');
+
   setInterval(async () => {
     await runCron('Limit order', executePendingLimitOrders);
     await runCron('SL order', executePendingStopOrders);
     await runCron('AMO', executeAmoOrders);
     await runCron('DAY expiry', expireDayPendingAtClose);
     await runCron('Price alert', checkAllPriceAlerts);
+    await runCron('Alerts schedule', runScheduledNotificationChecks);
   }, 30000);
+
+  setInterval(() => {
+    runCron('Daily alerts', runDailyNotificationChecks);
+  }, 60 * 60 * 1000);
 
   setInterval(() => {
     runScheduledAutoSquareOff().catch((err) => console.error('MIS auto square-off:', err.message));
   }, 60 * 1000);
+
+  setInterval(async () => {
+    try {
+      const { syncLotSizes } = require('./services/admin');
+      if (typeof syncLotSizes === 'function') await syncLotSizes();
+    } catch (e) {
+      console.error('Lot sync cron error:', e.message);
+    }
+  }, 6 * 60 * 60 * 1000);
+
+  setInterval(() => {
+    const { runScanAlertCron } = require('./services/scanAlerts');
+    runCron('Scan alerts', runScanAlertCron);
+  }, 30 * 60 * 1000);
 
   const PORT = process.env.PORT || 5000;
   httpServer.listen(PORT, () => {

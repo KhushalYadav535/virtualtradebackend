@@ -129,7 +129,64 @@ const buildAnalytics = (holdings) => {
       tradableQtyMis: h.tradableQtyMis
     }));
 
-  return { topGainers, topLosers, sectorBreakdown, lotConcentration, fractionalHoldings };
+  const fractionalCombinations = buildFractionalCombinations(holdings);
+  const fractionalBuySuggestions = buildFractionalBuySuggestions(holdings);
+
+  return {
+    topGainers,
+    topLosers,
+    sectorBreakdown,
+    lotConcentration,
+    fractionalHoldings,
+    fractionalCombinations,
+    fractionalBuySuggestions
+  };
+};
+
+const buildFractionalBuySuggestions = (holdings) => {
+  return holdings
+    .filter((h) => h.hasFractional && h.lotSizeMis > 1 && h.fractionalShares > 0)
+    .map((h) => {
+      const sharesNeeded = h.lotSizeMis - h.fractionalShares;
+      return {
+        type: 'single_stock',
+        symbol: h.symbol,
+        fractionalShares: h.fractionalShares,
+        lotSize: h.lotSizeMis,
+        sharesNeeded,
+        message: `Buy ${sharesNeeded} more ${h.symbol} to complete 1 more lot (${h.completeLots} → ${h.completeLots + 1} lots)`,
+        estCost: parseFloat((sharesNeeded * (h.currentPrice || 0)).toFixed(2))
+      };
+    })
+    .sort((a, b) => b.estCost - a.estCost)
+    .slice(0, 10);
+};
+
+const buildFractionalCombinations = (holdings) => {
+  const fractional = holdings.filter((h) => h.hasFractional && h.lotSizeMis > 1);
+  if (fractional.length < 2) return [];
+
+  const suggestions = [];
+  for (let i = 0; i < fractional.length; i++) {
+    for (let j = i + 1; j < fractional.length; j++) {
+      const a = fractional[i];
+      const b = fractional[j];
+      const combinedShares = a.fractionalShares + b.fractionalShares;
+      if (combinedShares >= Math.min(a.lotSizeMis, b.lotSizeMis)) {
+        suggestions.push({
+          type: 'cross_stock',
+          symbols: [a.symbol, b.symbol],
+          fractionalShares: [a.fractionalShares, b.fractionalShares],
+          lotSizes: [a.lotSizeMis, b.lotSizeMis],
+          combinedShares,
+          message: `Buy ${Math.min(a.lotSizeMis, b.lotSizeMis) - a.fractionalShares} more ${a.symbol} to make 1 full lot, freeing ${b.symbol} fractional for MIS sell`,
+          value: parseFloat((combinedShares * (a.currentPrice || 0)).toFixed(2))
+        });
+      }
+    }
+  }
+
+  return suggestions.sort((a, b) => b.value - a.value).slice(0, 5);
 };
 
 const sortHoldings = (holdings, sortBy = 'pnlPercent') => {

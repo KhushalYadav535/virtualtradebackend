@@ -45,9 +45,29 @@ const getPortfolioSummary = async (req, res, next) => {
 
 const getTradeHistory = async (req, res, next) => {
   try {
-    const limit = parseInt(req.query.limit) || 100;
+    const limit = parseInt(req.query.limit, 10) || 100;
     const history = await portfolioService.getTradeHistory(req.user.id, limit);
     res.json(history);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const tradeBookQueryOpts = (query) => ({
+  limit: query.limit,
+  side: query.side || 'all',
+  symbol: query.symbol || query.q || '',
+  dateFilter: query.dateFilter || query.date || 'all',
+  from: query.from,
+  to: query.to,
+  lotFilter: query.lotFilter || 'all',
+  product: query.product || 'all'
+});
+
+const getTradeBook = async (req, res, next) => {
+  try {
+    const data = await portfolioService.getTradeBook(req.user.id, tradeBookQueryOpts(req.query));
+    res.json(data);
   } catch (err) {
     next(err);
   }
@@ -163,10 +183,27 @@ const exportHoldingsReport = async (req, res, next) => {
 
 const exportTradesCsv = async (req, res, next) => {
   try {
-    const csv = await portfolioService.exportTradesCsv(req.user.id);
+    const csv = await portfolioService.exportTradesCsv(req.user.id, tradeBookQueryOpts(req.query));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename=trade_book.csv');
     res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const exportTradeBookTaxReport = async (req, res, next) => {
+  try {
+    const autoPrint = req.query.print === '1' || req.query.print === 'true';
+    const html = await portfolioService.exportTradeBookTaxHtml(req.user.id, {
+      ...tradeBookQueryOpts(req.query),
+      autoPrint
+    });
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (!autoPrint) {
+      res.setHeader('Content-Disposition', 'attachment; filename=tax-pnl-statement.html');
+    }
+    res.send(html);
   } catch (err) {
     next(err);
   }
@@ -178,6 +215,7 @@ module.exports = {
   getHoldingTrades,
   getPortfolioSummary,
   getTradeHistory,
+  getTradeBook,
   getPerformance,
   getTimeLoss,
   getIntradayPositions,
@@ -188,5 +226,6 @@ module.exports = {
   squareOffAllPositions,
   exportHoldingsCsv,
   exportHoldingsReport,
-  exportTradesCsv
+  exportTradesCsv,
+  exportTradeBookTaxReport
 };

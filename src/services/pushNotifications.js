@@ -30,7 +30,16 @@ const deleteSubscription = async (userId) => {
   await pool.query('DELETE FROM push_subscriptions WHERE user_id = $1', [userId]);
 };
 
-const defaultPrefs = { orders: true, alerts: true, achievements: true, marketing: false, lotChanges: true };
+const defaultPrefs = {
+  orders: true,
+  alerts: true,
+  achievements: true,
+  marketing: false,
+  lotChanges: true,
+  margin: true,
+  market: true,
+  funds: true
+};
 
 const getUserNotificationPrefs = async (userId) => {
   const result = await pool.query('SELECT notification_prefs FROM users WHERE id = $1', [userId]);
@@ -44,6 +53,9 @@ const sendNotification = async (userId, payload, category = 'alerts') => {
   if (category === 'achievements' && prefs.achievements === false) return false;
   if (category === 'marketing' && prefs.marketing === false) return false;
   if (category === 'lot_change' && prefs.lotChanges === false) return false;
+  if (category === 'margin' && prefs.margin === false) return false;
+  if (category === 'market' && prefs.market === false) return false;
+  if (category === 'funds' && prefs.funds === false) return false;
 
   const subscription = await getSubscription(userId);
   if (!subscription) {
@@ -73,24 +85,8 @@ const sendNotification = async (userId, payload, category = 'alerts') => {
 };
 
 const sendOrderNotification = async (userId, order) => {
-  const payload = {
-    title: order.status === 'executed' ? 'Order Executed' : 'Order Update',
-    body: order.status === 'executed'
-      ? `Your ${order.order_type} order for ${order.qty} ${order.symbol} has been executed at ₹${order.executed_price || order.price}`
-      : `Your ${order.order_type} order for ${order.qty} ${order.symbol} is now ${order.status}`,
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: `order-${order.id}`,
-    data: {
-      url: '/dashboard/portfolio',
-      orderId: order.id,
-      symbol: order.symbol,
-      type: order.order_type,
-      status: order.status
-    }
-  };
-
-  return sendNotification(userId, payload, 'orders');
+  const { notifyOrderUpdate } = require('./alertNotifications');
+  return notifyOrderUpdate(userId, order, order.status);
 };
 
 const sendLotChangeNotification = async (userId, { symbol, oldLot, newLot }) => {

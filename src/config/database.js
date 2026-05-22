@@ -285,6 +285,122 @@ const initDatabase = async () => {
       );
       CREATE INDEX IF NOT EXISTS idx_recent_search_user ON user_recent_searches(user_id);
 
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(12) UNIQUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS bonus_points INTEGER DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS referrals (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        referrer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        referred_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        points_awarded INTEGER DEFAULT 500,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+
+      CREATE TABLE IF NOT EXISTS user_challenge_claims (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        challenge_key VARCHAR(80) NOT NULL,
+        points INTEGER DEFAULT 0,
+        claimed_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(user_id, challenge_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS order_baskets (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL DEFAULT 'My Basket',
+        share_token VARCHAR(32) UNIQUE,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS order_basket_items (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        basket_id UUID NOT NULL REFERENCES order_baskets(id) ON DELETE CASCADE,
+        symbol VARCHAR(20) NOT NULL,
+        lots INTEGER NOT NULL DEFAULT 1,
+        qty INTEGER,
+        order_type VARCHAR(10) DEFAULT 'BUY',
+        product_type VARCHAR(10) DEFAULT 'MIS',
+        order_mode VARCHAR(20) DEFAULT 'market',
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_order_baskets_user ON order_baskets(user_id);
+      CREATE INDEX IF NOT EXISTS idx_basket_items_basket ON order_basket_items(basket_id);
+
+      CREATE TABLE IF NOT EXISTS saved_scans (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        filters JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_saved_scans_user ON saved_scans(user_id);
+
+      CREATE TABLE IF NOT EXISTS user_feedback (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        subject VARCHAR(200) NOT NULL,
+        message TEXT NOT NULL,
+        category VARCHAR(50) DEFAULT 'general',
+        status VARCHAR(20) DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_feedback_user ON user_feedback(user_id);
+
+      CREATE TABLE IF NOT EXISTS offline_orders (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        symbol VARCHAR(20) NOT NULL,
+        exchange VARCHAR(10) DEFAULT 'NSE',
+        qty INTEGER NOT NULL,
+        order_type VARCHAR(20) NOT NULL,
+        order_mode VARCHAR(20) DEFAULT 'market',
+        price DECIMAL(10,2),
+        product_type VARCHAR(10) DEFAULT 'CNC',
+        trigger_price DECIMAL(10,2),
+        queued_at TIMESTAMP DEFAULT NOW(),
+        synced_at TIMESTAMP,
+        status VARCHAR(20) DEFAULT 'queued',
+        error_message TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_offline_orders_user ON offline_orders(user_id);
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS biometric_enabled BOOLEAN DEFAULT false;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS order_pin_hash VARCHAR(255);
+
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key VARCHAR(50) PRIMARY KEY,
+        value JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      INSERT INTO app_settings (key, value) VALUES (
+        'feature_flags',
+        '{"maintenanceMode":false,"allowNewRegistrations":true,"optionsTradingEnabled":true,"misTradingEnabled":true,"showLeaderboard":true,"basketOrdersEnabled":true}'::jsonb
+      ) ON CONFLICT (key) DO NOTHING;
+
+      CREATE TABLE IF NOT EXISTS portfolios (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        description TEXT,
+        starting_capital DECIMAL(15,2) DEFAULT 100000,
+        active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id);
+
+      ALTER TABLE holdings ADD COLUMN IF NOT EXISTS portfolio_id UUID REFERENCES portfolios(id) ON DELETE SET NULL;
+      ALTER TABLE intraday_positions ADD COLUMN IF NOT EXISTS portfolio_id UUID REFERENCES portfolios(id) ON DELETE SET NULL;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS portfolio_id UUID REFERENCES portfolios(id) ON DELETE SET NULL;
+      ALTER TABLE trade_history ADD COLUMN IF NOT EXISTS portfolio_id UUID REFERENCES portfolios(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_holdings_portfolio ON holdings(portfolio_id);
+      CREATE INDEX IF NOT EXISTS idx_positions_portfolio ON intraday_positions(portfolio_id);
+      CREATE INDEX IF NOT EXISTS idx_orders_portfolio ON orders(portfolio_id);
+
       CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
       CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
       CREATE INDEX IF NOT EXISTS idx_holdings_user ON holdings(user_id);

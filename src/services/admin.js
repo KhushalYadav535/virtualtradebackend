@@ -231,6 +231,303 @@ const exportTradesCSV = async (userId = null, batchId = null) => {
   return csvRows.join('\n');
 };
 
+const DEFAULT_FEATURE_FLAGS = {
+  maintenanceMode: false,
+  allowNewRegistrations: true,
+  optionsTradingEnabled: true,
+  misTradingEnabled: true,
+  showLeaderboard: true,
+  basketOrdersEnabled: true
+};
+
+const trainerStudentFilter = (requesterId, requesterRole, alias = 'u') => {
+  if (requesterRole !== 'trainer') return { clause: '', params: [] };
+  return {
+    clause: ` AND (${alias}.batch_id IN (SELECT id FROM batches WHERE trainer_id = $1) OR ${alias}.batch_id IS NULL)`,
+    params: [requesterId]
+  };
+};
+
+const getAnalytics = async (requesterId, requesterRole) => {
+  const tf = trainerStudentFilter(requesterId, requesterRole, 'u');
+
+  const usersRes = await pool.query(
+    `SELECT COUNT(*)::int AS total FROM users u WHERE u.role = 'student'${tf.clause}`,
+    tf.params
+  );
+
+  const tradesRes = await pool.query(
+    `SELECT COUNT(*)::int AS cnt,
+            COALESCE(SUM(th.qty * th.trade_price), 0)::numeric AS volume
+     FROM trade_history th
+     JOIN users u ON u.id = th.user_id
+     WHERE th.timestamp >= CURRENT_DATE${tf.clause.replace(/\bu\./g, 'u.')}`,
+    tf.params
+  );
+
+  const rejectRes = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM orders o
+     JOIN users u ON u.id = o.user_id
+     WHERE o.status IN ('rejected', 'cancelled')
+       AND o.created_at >= CURRENT_DATE
+       AND o.reject_reason IS NOT NULL${tf.clause.replace(/u\./g, 'u.')}`,
+    tf.params
+  );
+
+  const pendingRes = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM orders o
+     JOIN users u ON u.id = o.user_id
+     WHERE o.status = 'pending'${tf.clause.replace(/u\./g, 'u.')}`,
+    tf.params
+  );
+
+  return {
+    totalUsers: usersRes.rows[0]?.total || 0,
+    activeTradesToday: tradesRes.rows[0]?.cnt || 0,
+    totalVolumeToday: parseFloat(tradesRes.rows[0]?.volume || 0),
+    rejectionsToday: rejectRes.rows[0]?.cnt || 0,
+    pendingOrders: pendingRes.rows[0]?.cnt || 0
+  };
+};
+
+const getRecentOrders = async (requesterId, requesterRole, limit = 80) => {
+  const tf = trainerStudentFilter(requesterId, requesterRole, 'u');
+  const params = [...tf.params, limit];
+  const limitIdx = params.length;
+
+  const result = await pool.query(
+    `SELECT o.*, u.name AS user_name, u.email AS user_email
+     FROM orders o
+     JOIN users u ON u.id = o.user_id
+     WHERE u.role = 'student'${tf.clause}
+     ORDER BY o.created_at DESC
+     LIMIT $${limitIdx}`,
+    params
+  );
+
+  return result.rows.map((r) => ({
+    id: r.id,
+    user: r.user_name,
+    userEmail: r.user_email,
+    symbol: r.symbol,
+    type: r.order_type,
+    qty: r.qty,
+    status: (r.status || '').toUpperCase(),
+    orderMode: r.order_mode,
+    productType: r.product_type,
+    rejectReason: r.reject_reason,
+    time: r.created_at
+  }));
+};
+
+const getLotValidationLogs = async (requesterId, requesterRole, limit = 80) => {
+  const tf = trainerStudentFilter(requesterId, requesterRole, 'u');
+  const halfLimit = Math.max(1, Math.floor(limit / 2));
+  const ordersParams = [...tf.params, halfLimit];
+
+  const ordersRes = await pool.query(
+    `SELECT o.id, u.name AS user_name, o.symbol, o.reject_reason AS issue,
+            o.status, o.created_at AS time
+     FROM orders o
+     JOIN users u ON u.id = o.user_id
+     WHERE o.reject_reason IS NOT NULL${tf.clause}
+     ORDER BY o.created_at DESC
+     LIMIT $${ordersParams.length}`,
+    ordersParams
+  );
+
+  const lotEvents = await pool.query(
+    `SELECT id, symbol, old_lot_size, new_lot_size, created_at AS time
+     FROM lot_change_events
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [halfLimit]
+  );
+
+  const orderLogs = ordersRes.rows.map((r) => ({
+    id: r.id,
+    user: r.user_name,
+    symbol: r.symbol,
+    issue: r.issue,
+    action: r.status === 'rejected' ? 'REJECTED' : 'CANCELLED',
+    time: r.time
+  }));
+
+  const lotLogs = lotEvents.rows.map((r) => ({
+    id: r.id,
+    user: 'System',
+    symbol: r.symbol,
+    issue: `Lot size changed ${r.old_lot_size} → ${r.new_lot_size}`,
+    action: 'LOT CHANGE',
+    time: r.time
+  }));
+
+  return [...orderLogs, ...lotLogs]
+    .sort((a, b) => new Date(b.time) - new Date(a.time))
+    .slice(0, limit);
+};
+
+const ensureAppSettingsTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key VARCHAR(50) PRIMARY KEY,
+      value JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )`);
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES (
+      'feature_flags',
+      $1::jsonb
+    ) ON CONFLICT (key) DO NOTHING`,
+    [JSON.stringify(DEFAULT_FEATURE_FLAGS)]
+  );
+};
+
+const getFeatureFlags = async () => {
+  try {
+    await ensureAppSettingsTable();
+    const res = await pool.query(`SELECT value FROM app_settings WHERE key = 'feature_flags'`);
+    if (!res.rows.length) return { ...DEFAULT_FEATURE_FLAGS };
+    return { ...DEFAULT_FEATURE_FLAGS, ...res.rows[0].value };
+  } catch (err) {
+    console.error('getFeatureFlags:', err.message);
+    return { ...DEFAULT_FEATURE_FLAGS };
+  }
+};
+
+const updateFeatureFlags = async (patch) => {
+  const current = await getFeatureFlags();
+  const next = {
+    maintenanceMode: patch.maintenanceMode === true,
+    allowNewRegistrations: patch.allowNewRegistrations !== false,
+    optionsTradingEnabled: patch.optionsTradingEnabled !== false,
+    misTradingEnabled: patch.misTradingEnabled !== false,
+    showLeaderboard: patch.showLeaderboard !== false,
+    basketOrdersEnabled: patch.basketOrdersEnabled !== false
+  };
+  await pool.query(
+    `INSERT INTO app_settings (key, value, updated_at) VALUES ('feature_flags', $1::jsonb, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+    [JSON.stringify(next)]
+  );
+  return next;
+};
+
+const getLotSizeMaster = async () => {
+  let cache = { rows: [] };
+  let events = { rows: [] };
+  try {
+    cache = await pool.query(
+      `SELECT symbol, lot_size, updated_at FROM symbol_lot_cache ORDER BY symbol`
+    );
+  } catch (err) {
+    console.error('getLotSizeMaster cache:', err.message);
+  }
+  try {
+    events = await pool.query(
+      `SELECT symbol, old_lot_size, new_lot_size, created_at
+       FROM lot_change_events ORDER BY created_at DESC LIMIT 30`
+    );
+  } catch (err) {
+    console.error('getLotSizeMaster events:', err.message);
+  }
+  const { FUTURES_UNIVERSE } = require('../data/futuresUniverse');
+  const { getLotSize } = require('./marketData');
+  const defaults = FUTURES_UNIVERSE.map((f) => ({
+    symbol: f.symbol,
+    lotSize: getLotSize(f.symbol),
+    source: 'default',
+    updatedAt: null
+  }));
+  const cacheMap = Object.fromEntries(cache.rows.map((r) => [r.symbol, r]));
+  const merged = [...new Set([...defaults.map((d) => d.symbol), ...cache.rows.map((r) => r.symbol)])].map(
+    (sym) => {
+      const c = cacheMap[sym];
+      return {
+        symbol: sym,
+        lotSize: c ? c.lot_size : getLotSize(sym),
+        source: c ? 'cache' : 'default',
+        updatedAt: c?.updated_at || null
+      };
+    }
+  );
+  return { lots: merged.sort((a, b) => a.symbol.localeCompare(b.symbol)), recentChanges: events.rows };
+};
+
+const syncLotSizes = async () => {
+  const { getLotSize } = require('./marketData');
+  const { FUTURES_UNIVERSE } = require('../data/futuresUniverse');
+  const allSymbols = new Set();
+
+  for (const f of FUTURES_UNIVERSE) allSymbols.add(f.symbol);
+  try {
+    const { getCachedLotSize } = require('./lotChangeAlerts');
+    const marketData = require('./marketData');
+    let stockList = [];
+    try { stockList = await marketData.getStockList() || []; } catch (e) {}
+    for (const s of stockList) {
+      const sym = (s.symbol || s).toUpperCase().trim();
+      if (sym) allSymbols.add(sym);
+    }
+  } catch (e) {}
+
+  const entries = [...allSymbols].map((sym) => ({ symbol: sym, lotSize: getLotSize(sym) }));
+  const uniqueEntries = [];
+  const seen = new Set();
+  for (const e of entries) {
+    if (!seen.has(e.symbol)) { seen.add(e.symbol); uniqueEntries.push(e); }
+  }
+
+  if (!uniqueEntries.length || !pool) return { synced: 0, total: 0, message: 'No symbols to sync' };
+
+  const chunkSize = 100;
+  let synced = 0;
+  for (let i = 0; i < uniqueEntries.length; i += chunkSize) {
+    const chunk = uniqueEntries.slice(i, i + chunkSize);
+    const symbols = chunk.map((e) => e.symbol);
+    const sizes = chunk.map((e) => e.lotSize);
+    await pool.query(
+      `INSERT INTO symbol_lot_cache (symbol, lot_size, updated_at)
+       SELECT s, l, NOW() FROM unnest($1::varchar[], $2::int[]) AS t(s, l)
+       ON CONFLICT (symbol) DO UPDATE SET lot_size = EXCLUDED.lot_size, updated_at = NOW()`,
+      [symbols, sizes]
+    );
+    synced += chunk.length;
+  }
+
+  await pool.query(
+    `INSERT INTO app_settings (key, value) VALUES ('last_lot_sync', $1::jsonb)
+     ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()`,
+    [JSON.stringify({ syncedAt: new Date().toISOString(), count: uniqueEntries.length })]
+  );
+
+  return { synced, total: uniqueEntries.length, message: `Synced ${synced} lot sizes` };
+};
+
+const upsertLotSize = async (symbol, lotSize) => {
+  const sym = String(symbol || '').toUpperCase().trim();
+  const size = parseInt(lotSize, 10);
+  if (!sym || size < 1) throw { status: 400, message: 'Invalid symbol or lot size' };
+
+  const prev = await pool.query(`SELECT lot_size FROM symbol_lot_cache WHERE symbol = $1`, [sym]);
+  const oldLot = prev.rows[0]?.lot_size;
+
+  await pool.query(
+    `INSERT INTO symbol_lot_cache (symbol, lot_size, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (symbol) DO UPDATE SET lot_size = $2, updated_at = NOW()`,
+    [sym, size]
+  );
+
+  if (oldLot && oldLot !== size) {
+    await pool.query(
+      `INSERT INTO lot_change_events (symbol, old_lot_size, new_lot_size) VALUES ($1, $2, $3)`,
+      [sym, oldLot, size]
+    );
+  }
+
+  return { symbol: sym, lotSize: size, previous: oldLot || null };
+};
+
 module.exports = {
   getAllStudents,
   getStudentDetails,
@@ -241,5 +538,14 @@ module.exports = {
   banUser,
   activateUser,
   getLeaderboard,
-  exportTradesCSV
+  exportTradesCSV,
+  getAnalytics,
+  getRecentOrders,
+  getLotValidationLogs,
+  getFeatureFlags,
+  updateFeatureFlags,
+  getLotSizeMaster,
+  upsertLotSize,
+  syncLotSizes,
+  DEFAULT_FEATURE_FLAGS
 };

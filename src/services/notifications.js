@@ -9,14 +9,21 @@ const createNotification = async (userId, { type, title, body, metadata = {} }) 
   return result.rows[0];
 };
 
-const listNotifications = async (userId, { limit = 50, unreadOnly = false } = {}) => {
+const listNotifications = async (userId, { limit = 50, unreadOnly = false, type } = {}) => {
   const params = [userId];
   let sql = `SELECT * FROM in_app_notifications WHERE user_id = $1`;
   if (unreadOnly) sql += ` AND is_read = false`;
-  sql += ` ORDER BY created_at DESC LIMIT $2`;
+  if (type && type !== 'all') {
+    params.push(type);
+    sql += ` AND type = $${params.length}`;
+  }
+  sql += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
   params.push(limit);
   const result = await pool.query(sql, params);
-  return result.rows;
+  return result.rows.map((row) => ({
+    ...row,
+    metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : row.metadata || {}
+  }));
 };
 
 const getUnreadCount = async (userId) => {
@@ -45,10 +52,16 @@ const markAllRead = async (userId) => {
   return { message: 'All notifications marked as read' };
 };
 
+const clearAll = async (userId) => {
+  await pool.query(`DELETE FROM in_app_notifications WHERE user_id = $1`, [userId]);
+  return { message: 'All notifications cleared' };
+};
+
 module.exports = {
   createNotification,
   listNotifications,
   getUnreadCount,
   markRead,
-  markAllRead
+  markAllRead,
+  clearAll
 };

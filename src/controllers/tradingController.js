@@ -1,4 +1,6 @@
 const tradingService = require('../services/trading');
+const { pool } = require('../config/database');
+const { verifyOrderPin } = require('../services/orderPinService');
 const { z } = require('zod');
 
 const orderSchema = z.object({
@@ -14,7 +16,9 @@ const orderSchema = z.object({
   validity: z.enum(['DAY', 'IOC', 'GTT']).optional(),
   exchange: z.string().optional(),
   isAmo: z.boolean().optional(),
-  disclosedQty: z.number().int().positive().optional()
+  disclosedQty: z.number().int().positive().optional(),
+  portfolioId: z.string().uuid().optional(),
+  orderPin: z.string().length(4).optional()
 });
 
 const chargesSchema = z.object({
@@ -26,6 +30,7 @@ const chargesSchema = z.object({
 const placeOrder = async (req, res, next) => {
   try {
     const parsed = orderSchema.parse(req.body);
+    await verifyOrderPin(req.user.id, parsed.orderPin);
     const order = await tradingService.placeOrder({
       userId: req.user.id,
       ...parsed,
@@ -154,6 +159,83 @@ const modifyOrder = async (req, res, next) => {
   }
 };
 
+const getHedgeBenefit = async (req, res, next) => {
+  try {
+    if (!pool) return res.json({ hedgeRate: 1, normalRate: 1, benefitPct: 0, hasHedge: false });
+    const userId = req.user.id;
+    const { symbol } = req.query;
+    if (!symbol) return res.json({ hedgeRate: 1, normalRate: 1, benefitPct: 0, hasHedge: false });
+
+    const holdingRows = await pool.query(
+      `SELECT symbol, qty FROM holdings WHERE user_id = $1 AND symbol = $2`,
+      [userId, symbol.toUpperCase()]
+    );
+    const held = parseInt(holdingRows.rows[0]?.qty || '0', 10);
+    const isBuy = req.query.orderType !== 'SELL';
+    const hasOppositePosition = held > 0 && !isBuy;
+
+    const { getStockQuote } = require('../services/marketData');
+    const quote = await getStockQuote(symbol);
+    const isFO = (quote?.lotSize || 1) > 1;
+
+    let hedgeRate = 1;
+    let benefitPct = 0;
+    const normalRate = isFO ? 0.15 : 1;
+
+    if (hasOppositePosition && isFO) {
+      hedgeRate = 0.07;
+      benefitPct = parseFloat(((1 - hedgeRate / normalRate) * 100).toFixed(1));
+    }
+
+    res.json({ hedgeRate, normalRate, benefitPct, hasHedge: hasOppositePosition && isFO, heldQty: held });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getSpreadMarginBenefit = async (req, res, next) => {
+  try {
+    if (!pool) {
+      return res.json({ hasSpread: false, spreadBenefitPct: 0, normalMarginRate: 0.15, spreadMarginRate: 0.15 });
+    }
+    const userId = req.user.id;
+    const symbol = (req.query.symbol || '').toUpperCase();
+    const orderType = req.query.orderType === 'SELL' ? 'SELL' : 'BUY';
+    const productType = req.query.productType || 'MIS';
+
+    const posRes = await pool.query(
+      `SELECT order_type, SUM(qty)::int AS qty FROM intraday_positions
+       WHERE user_id = $1 AND symbol = $2 AND status = 'open'
+       GROUP BY order_type`,
+      [userId, symbol]
+    );
+    const longQty = parseInt(posRes.rows.find((r) => r.order_type === 'BUY')?.qty || '0', 10);
+    const shortQty = parseInt(posRes.rows.find((r) => r.order_type === 'SELL')?.qty || '0', 10);
+    const hasLong = longQty > 0;
+    const hasShort = shortQty > 0;
+    const isOpposite =
+      (orderType === 'BUY' && hasShort) || (orderType === 'SELL' && hasLong);
+
+    const normalRate = productType === 'MIS' ? 0.15 : 1;
+    const spreadMarginRate = isOpposite && productType === 'MIS' ? 0.08 : normalRate;
+    const spreadBenefitPct =
+      isOpposite && normalRate > spreadMarginRate
+        ? parseFloat(((1 - spreadMarginRate / normalRate) * 100).toFixed(1))
+        : 0;
+
+    res.json({
+      hasSpread: isOpposite,
+      spreadBenefitPct,
+      normalMarginRate: normalRate,
+      spreadMarginRate,
+      longQty,
+      shortQty
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   placeOrder,
   getOrders,
@@ -162,5 +244,7 @@ module.exports = {
   cancelOrder,
   modifyOrder,
   getCharges,
-  getLotPreview
+  getLotPreview,
+  getHedgeBenefit,
+  getSpreadMarginBenefit
 };

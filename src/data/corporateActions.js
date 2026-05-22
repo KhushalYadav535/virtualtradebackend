@@ -32,6 +32,13 @@ const SYMBOL_MAP = bySymbol();
 
 const getActionsForSymbol = (symbol) => {
   const sym = String(symbol || '').toUpperCase();
+  try {
+    const feeds = require('../services/nseLiveFeeds');
+    const hit = feeds.getCachedActionsForSymbol(sym);
+    if (hit?.length) return hit;
+  } catch {
+    /* static fallback */
+  }
   return SYMBOL_MAP[sym] || [];
 };
 
