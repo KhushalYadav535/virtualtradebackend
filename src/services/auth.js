@@ -68,6 +68,7 @@ const register = async (name, email, password, role = 'student', batchId = null,
 };
 
 const login = async (email, password, deviceInfo = null, browser = null, ip = null) => {
+  if (!pool) throw { status: 503, message: 'Database not available' };
   const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
   if (result.rows.length === 0) {
     throw { status: 401, message: 'Invalid credentials' };
@@ -171,6 +172,12 @@ const disable2FA = async (userId, token) => {
   return true;
 };
 
+const clipStr = (value, maxLen) => {
+  if (value == null) return null;
+  const s = String(value);
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+};
+
 const saveRefreshToken = async (userId, token, familyId, deviceInfo = null, browser = null, ip = null) => {
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await pool.query(
@@ -179,7 +186,12 @@ const saveRefreshToken = async (userId, token, familyId, deviceInfo = null, brow
   );
   await pool.query(
     'INSERT INTO user_sessions (user_id, device_info, browser, ip_address, is_current) VALUES ($1, $2, $3, $4, true)',
-    [userId, deviceInfo, browser, ip]
+    [
+      userId,
+      clipStr(deviceInfo, 255),
+      clipStr(browser, 255),
+      clipStr(ip, 45)
+    ]
   );
   await pool.query(
     `UPDATE user_sessions SET is_current = false
@@ -349,6 +361,8 @@ const revokeAllSessions = async (userId, exceptCurrent = true) => {
 };
 
 const updateActivity = async (userId) => {
+  if (!pool) return;
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity TIMESTAMP DEFAULT NOW()').catch(() => {});
   await pool.query('UPDATE users SET last_activity = NOW() WHERE id = $1', [userId]);
   await pool.query(
     'UPDATE user_sessions SET last_active = NOW() WHERE user_id = $1 AND is_current = true',

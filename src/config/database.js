@@ -162,7 +162,7 @@ const initDatabase = async () => {
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID REFERENCES users(id) ON DELETE CASCADE,
         device_info VARCHAR(255),
-        browser VARCHAR(100),
+        browser VARCHAR(255),
         ip_address VARCHAR(45),
         last_active TIMESTAMP DEFAULT NOW(),
         is_current BOOLEAN DEFAULT false,
@@ -428,6 +428,9 @@ const initDatabase = async () => {
         BEFORE DELETE ON trade_history
         FOR EACH ROW EXECUTE PROCEDURE prevent_trade_history_modification();
     `);
+    await client.query(`
+      ALTER TABLE user_sessions ALTER COLUMN browser TYPE VARCHAR(255);
+    `).catch(() => {});
     console.log('✓ Database tables initialized');
   } finally {
     client.release();

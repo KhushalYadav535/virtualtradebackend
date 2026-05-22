@@ -21,7 +21,7 @@ const sendEmail = async ({ to, subject, html, text }) => {
     if (!res.ok) {
       const err = await res.text();
       console.error('Resend API error:', err);
-      throw new Error('Failed to send email');
+      return { sent: false, fallback: true, error: err };
     }
 
     return { sent: true };

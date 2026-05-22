@@ -6,6 +6,8 @@ const hashFingerprint = (raw) =>
   crypto.createHash('sha256').update(String(raw || 'unknown')).digest('hex').slice(0, 64);
 
 const ensureSecurityTables = async () => {
+  if (!pool) return;
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`).catch(() => {});
   await pool.query(`
     CREATE TABLE IF NOT EXISTS login_attempts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -33,7 +35,13 @@ const ensureSecurityTables = async () => {
 };
 
 const recordLoginAttempt = async (email, success, ip = null) => {
-  await ensureSecurityTables();
+  if (!pool) return;
+  try {
+    await ensureSecurityTables();
+  } catch (e) {
+    console.warn('recordLoginAttempt ensureSecurityTables:', e.message);
+    return;
+  }
   await pool.query(
     `INSERT INTO login_attempts (email, ip_address, success) VALUES ($1, $2, $3)`,
     [email?.toLowerCase() || null, ip, !!success]
@@ -41,7 +49,13 @@ const recordLoginAttempt = async (email, success, ip = null) => {
 };
 
 const checkSuspiciousLogin = async (email) => {
-  await ensureSecurityTables();
+  if (!pool) return { failures: 0, suspicious: false };
+  try {
+    await ensureSecurityTables();
+  } catch (e) {
+    console.warn('checkSuspiciousLogin ensureSecurityTables:', e.message);
+    return { failures: 0, suspicious: false };
+  }
   const res = await pool.query(
     `SELECT COUNT(*)::int AS cnt FROM login_attempts
      WHERE email = $1 AND success = false AND attempted_at > NOW() - INTERVAL '15 minutes'`,

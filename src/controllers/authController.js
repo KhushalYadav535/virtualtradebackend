@@ -72,24 +72,27 @@ const login = async (req, res, next) => {
     const { email, password, deviceFingerprint, deviceLabel } = loginSchema.parse(req.body);
     await securityService.checkSuspiciousLogin(email);
     try {
+      const ua = req.headers['user-agent'];
       const result = await authService.login(
         email,
         password,
         deviceLabel || 'Web',
-        req.headers['user-agent'],
+        ua ? String(ua).slice(0, 255) : null,
         req.ip
       );
       await securityService.recordLoginAttempt(email, true, req.ip);
       if (result.user?.id && deviceFingerprint) {
-        await securityService.registerDevice(
-          result.user.id,
-          deviceFingerprint,
-          deviceLabel || req.headers['user-agent']?.slice(0, 80) || 'Web'
-        );
+        await securityService
+          .registerDevice(
+            result.user.id,
+            deviceFingerprint,
+            deviceLabel || req.headers['user-agent']?.slice(0, 80) || 'Web'
+          )
+          .catch((e) => console.warn('registerDevice:', e.message));
       }
       res.json(result);
     } catch (loginErr) {
-      await securityService.recordLoginAttempt(email, false, req.ip);
+      await securityService.recordLoginAttempt(email, false, req.ip).catch(() => {});
       throw loginErr;
     }
   } catch (err) {
@@ -322,11 +325,13 @@ const registerWithPhone = async (req, res, next) => {
 const loginWithPhone = async (req, res, next) => {
   try {
     const { phone, otp } = mobileLoginSchema.parse(req.body);
+    const ua = req.headers['user-agent'];
+    const uaShort = ua ? String(ua).slice(0, 255) : null;
     const result = await authService.loginWithPhone(
       phone,
       otp,
-      req.headers['user-agent'],
-      req.headers['user-agent'],
+      'Mobile',
+      uaShort,
       req.ip
     );
     res.json(result);
