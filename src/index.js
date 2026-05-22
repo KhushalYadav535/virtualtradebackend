@@ -37,8 +37,9 @@ if (process.env.NODE_ENV === 'production' || process.env.FORCE_HTTPS === 'true')
 
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
-    methods: ['GET', 'POST']
+    origin: true,
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
