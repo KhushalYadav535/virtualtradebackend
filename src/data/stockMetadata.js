@@ -70,16 +70,34 @@ const hashMetric = (sym, salt = '') => {
   return h;
 };
 
+const META_CACHE = new Map();
+const computeMeta = (sym) => {
+  const cached = META_CACHE.get(sym);
+  if (cached) return cached;
+  const sector = SECTOR_MAP[sym] || 'Other';
+  const isin = ISIN_MAP[sym] || null;
+  const marketCap = NIFTY_50.includes(sym) ? 'Large' : 'Mid';
+  const h = hashMetric(sym);
+  const peRatio = parseFloat((12 + (h % 35)).toFixed(2));
+  const pbRatio = parseFloat((0.8 + ((h + 7) % 40) / 10).toFixed(2));
+  const dividendYield = parseFloat(((h % 8) / 2).toFixed(2));
+  const meta = { sector, isin, marketCap, peRatio, pbRatio, dividendYield };
+  META_CACHE.set(sym, meta);
+  return meta;
+};
+
 const enrichStock = (stock) => {
   const sym = (stock.symbol || '').toUpperCase();
-  const sector = stock.sector || SECTOR_MAP[sym] || 'Other';
-  const isin = stock.isin || ISIN_MAP[sym] || null;
-  const marketCap = stock.marketCap || (NIFTY_50.includes(sym) ? 'Large' : 'Mid');
-  const h = hashMetric(sym);
-  const peRatio = stock.peRatio ?? parseFloat((12 + (h % 35)).toFixed(2));
-  const pbRatio = stock.pbRatio ?? parseFloat((0.8 + ((h + 7) % 40) / 10).toFixed(2));
-  const dividendYield = stock.dividendYield ?? parseFloat(((h % 8) / 2).toFixed(2));
-  return { ...stock, sector, isin, marketCap, peRatio, pbRatio, dividendYield };
+  const meta = computeMeta(sym);
+  return {
+    ...stock,
+    sector: stock.sector || meta.sector,
+    isin: stock.isin || meta.isin,
+    marketCap: stock.marketCap || meta.marketCap,
+    peRatio: stock.peRatio ?? meta.peRatio,
+    pbRatio: stock.pbRatio ?? meta.pbRatio,
+    dividendYield: stock.dividendYield ?? meta.dividendYield
+  };
 };
 
 const filterBySector = (stocks, sector) => {

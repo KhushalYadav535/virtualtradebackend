@@ -137,18 +137,31 @@ const getPositionsDetail = async (userId) => {
     [userId]
   );
 
-  const positions = await Promise.all(
-    result.rows.map(async (row) => {
-      const quote = await getStockQuote(row.symbol);
-      return enrichPosition(
-        {
-          ...row,
-          avg_buy_price: parseFloat(row.avg_buy_price),
-          margin_blocked: parseFloat(row.margin_blocked)
-        },
-        quote
-      );
-    })
+  if (!result.rows.length) {
+    return {
+      positions: [],
+      ...buildTotals([]),
+      autoSquareOff: getAutoSquareOffStatus()
+    };
+  }
+
+  const symbols = result.rows.map((row) => row.symbol);
+  const { getMultipleQuotes } = require('./marketData');
+  const quotes = await getMultipleQuotes(symbols);
+  const quoteMap = {};
+  for (const q of quotes) {
+    if (q?.symbol) quoteMap[q.symbol] = q;
+  }
+
+  const positions = result.rows.map((row) =>
+    enrichPosition(
+      {
+        ...row,
+        avg_buy_price: parseFloat(row.avg_buy_price),
+        margin_blocked: parseFloat(row.margin_blocked)
+      },
+      quoteMap[row.symbol]
+    )
   );
 
   return {
@@ -375,20 +388,55 @@ const autoSquareOffAllUsers = async () => {
   }
 };
 
+const lastAutoSquareOffByUser = new Map();
 let lastAutoSquareOffDate = null;
 
-/** Run once per trading day during 3:20–3:25 PM IST window */
+const parsePrefTime = (str) => {
+  const m = String(str || '15:20').match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return 15 * 60 + 20;
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+  const mm = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+  let total = h * 60 + mm;
+  // Clamp to safe intraday window: 14:30 (early exit not allowed before this) – 15:29
+  if (total < 14 * 60 + 30) total = 14 * 60 + 30;
+  if (total > 15 * 60 + 29) total = 15 * 60 + 29;
+  return total;
+};
+
+/** Run every minute. Squares off each user when current IST minute matches their preferred time. */
 const runScheduledAutoSquareOff = async () => {
   const { getIstClock } = require('../utils/positionUtils');
   const { day, minutes, dateKey } = getIstClock();
   if (day === 0 || day === 6) return;
-  const execStart = 15 * 60 + 20;
-  const execEnd = 15 * 60 + 25;
-  if (minutes < execStart || minutes > execEnd) return;
-  if (lastAutoSquareOffDate === dateKey) return;
-  lastAutoSquareOffDate = dateKey;
-  console.log('✓ Auto square-off MIS positions (3:20 PM IST)');
-  await autoSquareOffAllUsers();
+
+  // Reset daily memo on new trading date
+  if (lastAutoSquareOffDate !== dateKey) {
+    lastAutoSquareOffByUser.clear();
+    lastAutoSquareOffDate = dateKey;
+  }
+
+  // Only check inside reasonable window (saves DB hits outside 14:30–15:30)
+  if (minutes < 14 * 60 + 30 || minutes > 15 * 60 + 30) return;
+
+  const usersWithPositions = await pool.query(
+    `SELECT DISTINCT p.user_id, COALESCE((u.trading_prefs->>'autoSquareOffTime'), '15:20') AS auto_time
+     FROM intraday_positions p
+     LEFT JOIN users u ON u.id = p.user_id`
+  );
+
+  for (const row of usersWithPositions.rows) {
+    if (lastAutoSquareOffByUser.has(row.user_id)) continue;
+    const prefMins = parsePrefTime(row.auto_time);
+    // Fire if current minute is within the user's preferred minute or up to 4 min after
+    if (minutes < prefMins || minutes > prefMins + 4) continue;
+    lastAutoSquareOffByUser.set(row.user_id, dateKey);
+    try {
+      console.log(`✓ Auto square-off user ${row.user_id} at ${row.auto_time} IST`);
+      await squareOffAll(row.user_id);
+    } catch (err) {
+      console.error(`Auto square-off user ${row.user_id}:`, err.message);
+    }
+  }
 };
 
 module.exports = {

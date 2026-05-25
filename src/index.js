@@ -139,12 +139,14 @@ async function startServer() {
   } = require('./services/scheduledNotifications');
 
   setInterval(async () => {
-    await runCron('Limit order', executePendingLimitOrders);
-    await runCron('SL order', executePendingStopOrders);
-    await runCron('AMO', executeAmoOrders);
-    await runCron('DAY expiry', expireDayPendingAtClose);
-    await runCron('Price alert', checkAllPriceAlerts);
-    await runCron('Alerts schedule', runScheduledNotificationChecks);
+    await Promise.all([
+      runCron('Limit order', executePendingLimitOrders),
+      runCron('SL order', executePendingStopOrders),
+      runCron('AMO', executeAmoOrders),
+      runCron('DAY expiry', expireDayPendingAtClose),
+      runCron('Price alert', checkAllPriceAlerts),
+      runCron('Alerts schedule', runScheduledNotificationChecks)
+    ]);
   }, 30000);
 
   setInterval(() => {

@@ -840,7 +840,15 @@ const fetchIndicesFromYahoo = async () => {
   return filtered.length >= 2 ? filtered : null;
 };
 
+const INDICES_CACHE_TTL_MS = 12 * 1000;
+let indicesCache = null;
+let indicesCacheAt = 0;
+
 const getIndices = async () => {
+  if (indicesCache && Date.now() - indicesCacheAt < INDICES_CACHE_TTL_MS) {
+    return indicesCache;
+  }
+
   let targets = [...INDEX_TARGETS];
   try {
     const customRes = await pool.query("SELECT value FROM app_settings WHERE key = 'custom_indices'");
@@ -857,20 +865,25 @@ const getIndices = async () => {
   }
 
   const fromNse = await fetchIndicesFromNse();
+  let result;
   if (fromNse?.length) {
     const nseLabels = new Set(fromNse.map(i => i.symbol));
     const missing = targets.filter(t => !nseLabels.has(t.label)).map(stableSimulatedIndex);
-    return [...fromNse, ...missing];
+    result = [...fromNse, ...missing];
+  } else {
+    const fromYahoo = await fetchIndicesFromYahoo();
+    if (fromYahoo?.length) {
+      const yhLabels = new Set(fromYahoo.map(i => i.symbol));
+      const missing = targets.filter(t => !yhLabels.has(t.label)).map(stableSimulatedIndex);
+      result = [...fromYahoo, ...missing];
+    } else {
+      result = targets.map(stableSimulatedIndex);
+    }
   }
 
-  const fromYahoo = await fetchIndicesFromYahoo();
-  if (fromYahoo?.length) {
-    const yhLabels = new Set(fromYahoo.map(i => i.symbol));
-    const missing = targets.filter(t => !yhLabels.has(t.label)).map(stableSimulatedIndex);
-    return [...fromYahoo, ...missing];
-  }
-
-  return targets.map(stableSimulatedIndex);
+  indicesCache = result;
+  indicesCacheAt = Date.now();
+  return result;
 };
 
 const getIstMinutes = () => {
@@ -946,8 +959,18 @@ let priceUpdateInterval = null;
 const startMarketDataCron = (io) => {
   if (priceUpdateInterval) return;
 
+  let tickCount = 0;
   priceUpdateInterval = setInterval(async () => {
     try {
+      tickCount++;
+      const clientCount = io.engine?.clientsCount ?? 0;
+      if (clientCount === 0) return;
+
+      const phase = getMarketPhase();
+      const closed = phase === 'closed';
+      // When market is closed, run heavy work every 4th tick (~60s instead of 15s)
+      if (closed && tickCount % 4 !== 0) return;
+
       const quotes = await getMultipleQuotes(POLL_SYMBOLS);
 
       try {
@@ -966,7 +989,7 @@ const startMarketDataCron = (io) => {
     }
   }, 15000);
 
-  console.log('✓ Market data cron started (15s interval)');
+  console.log('✓ Market data cron started (15s open / 60s closed, skipped when no clients)');
 
   setTimeout(() => {
     const { getLiveCorporateActions, getFiiDii } = require('./nseLiveFeeds');

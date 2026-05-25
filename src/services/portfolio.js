@@ -18,15 +18,35 @@ const getPendingSellQtyForSymbol = async (userId, symbol) => {
   return parseInt(result.rows[0]?.qty, 10) || 0;
 };
 
+const getPendingSellQtyMap = async (userId, symbols) => {
+  if (!symbols?.length) return {};
+  const result = await pool.query(
+    `SELECT symbol, COALESCE(SUM(qty), 0)::int AS qty FROM orders
+     WHERE user_id = $1 AND symbol = ANY($2::text[]) AND order_type = 'SELL' AND status = 'pending'
+     GROUP BY symbol`,
+    [userId, symbols]
+  );
+  const map = {};
+  for (const row of result.rows) {
+    map[row.symbol] = parseInt(row.qty, 10) || 0;
+  }
+  return map;
+};
+
 const enrichHoldingsRows = async (userId, rows) => {
-  return Promise.all(
-    rows.map(async (holding) => {
-      const [quote, pendingSellQty] = await Promise.all([
-        getStockQuote(holding.symbol),
-        getPendingSellQtyForSymbol(userId, holding.symbol)
-      ]);
-      return buildHoldingRow(holding, quote, pendingSellQty);
-    })
+  if (!rows?.length) return [];
+  const symbols = rows.map((h) => h.symbol);
+  const { getMultipleQuotes } = require('./marketData');
+  const [quotes, pendingMap] = await Promise.all([
+    getMultipleQuotes(symbols),
+    getPendingSellQtyMap(userId, symbols)
+  ]);
+  const quoteMap = {};
+  for (const q of quotes) {
+    if (q?.symbol) quoteMap[q.symbol] = q;
+  }
+  return rows.map((holding) =>
+    buildHoldingRow(holding, quoteMap[holding.symbol], pendingMap[holding.symbol] || 0)
   );
 };
 
